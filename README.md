@@ -486,10 +486,3 @@ celery -A app.core.celery_app worker --loglevel=info -Q scans
 
 ---
 
-## License
-
-MIT
-
----
-
-Built with ❤️ by [@0xnithinmys](https://github.com/0xnithinmys)
