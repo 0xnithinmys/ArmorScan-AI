@@ -1,4 +1,4 @@
-from typing import TypedDict, List, Optional, Literal, Any
+from typing import Any, List, Literal, Optional, TypedDict
 
 
 class FindingDraft(TypedDict):
@@ -11,6 +11,8 @@ class FindingDraft(TypedDict):
     payload: Optional[str]
     evidence: Optional[str]
     confidence: float  # 0.0 - 1.0
+    reproduction_steps: List[str]
+    rationale: Optional[str]
 
 
 class ScanState(TypedDict):
@@ -28,12 +30,15 @@ class ScanState(TypedDict):
     discovered_routes: List[str]
     discovered_forms: List[dict]
     discovered_inputs: List[dict]
+    browser_observations: List[dict]
+    browser_errors: List[str]
     technology_stack: List[str]
     state_graph: Optional[dict]
 
     # Planning outputs
     intent_plan: Optional[dict]
     armoriq_token: Optional[str]
+    http_observations: List[dict]
 
     # Exploitation outputs
     findings_drafts: List[FindingDraft]

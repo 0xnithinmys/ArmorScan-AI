@@ -1,18 +1,55 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.api.deps import get_current_user
+from app.api.v1.schemas import TargetCreateRequest, TargetRead
+from app.core.database import get_db
+from app.models import Target, User
 
 router = APIRouter()
 
 
-@router.get("/")
-async def list_targets():
-    return {"targets": [], "message": "Target management — implemented in Phase 3"}
+@router.get("/", response_model=list[TargetRead])
+async def list_targets(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = await db.execute(
+        select(Target).where(Target.owner_id == current_user.id).order_by(Target.created_at.desc())
+    )
+    return [TargetRead.model_validate(target) for target in result.scalars().all()]
 
 
-@router.post("/")
-async def create_target():
-    return {"message": "Create target — implemented in Phase 3"}
+@router.post("/", response_model=TargetRead, status_code=status.HTTP_201_CREATED)
+async def create_target(
+    payload: TargetCreateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    target = Target(
+        owner_id=current_user.id,
+        name=payload.name,
+        target_type=payload.target_type,
+        target_url=payload.target_url,
+        scope=payload.scope,
+    )
+    db.add(target)
+    await db.flush()
+    return TargetRead.model_validate(target)
 
 
-@router.delete("/{target_id}")
-async def delete_target(target_id: str):
-    return {"message": f"Delete target {target_id} — implemented in Phase 3"}
+@router.delete("/{target_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_target(
+    target_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = await db.execute(
+        select(Target).where(Target.id == target_id, Target.owner_id == current_user.id)
+    )
+    target = result.scalar_one_or_none()
+    if target is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target not found")
+
+    await db.delete(target)

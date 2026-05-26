@@ -1,7 +1,7 @@
 # ArmorScan AI — Agents Package
 #
 # Multi-agent AI system built on LangGraph.
-# Agents are implemented in Phase 4.
+# Phase 4 implementation lives in this package.
 #
 # Structure:
 #   armorscan/

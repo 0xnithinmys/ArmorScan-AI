@@ -466,10 +466,10 @@ celery -A app.core.celery_app worker --loglevel=info -Q scans
 ## Roadmap
 
 - [x] **Phase 1** — Project foundation & monorepo setup
-- [ ] **Phase 2** — Frontend dashboard & UI (Next.js)
-- [ ] **Phase 3** — Backend API (FastAPI + PostgreSQL)
-- [ ] **Phase 4** — AI agent system (LangGraph)
-- [ ] **Phase 5** — Browser automation (Playwright)
+- [x] **Phase 2** — Frontend dashboard & UI (Next.js)
+- [x] **Phase 3** — Backend API (FastAPI + PostgreSQL)
+- [x] **Phase 4** — AI agent system (LangGraph)
+- [x] **Phase 5** — Browser automation (Playwright)
 - [ ] **Phase 6** — Policy engine (ArmorIQ)
 - [ ] **Phase 7** — Scanning engines (Nuclei, Semgrep, Bandit)
 - [ ] **Phase 8** — Risk scoring & reporting engine

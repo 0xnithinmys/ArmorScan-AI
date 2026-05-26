@@ -3,7 +3,11 @@ from typing import List
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=(".env", "../.env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     # App
     APP_NAME: str = "ArmorScan AI"
@@ -24,12 +28,20 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: List[str] = ["http://localhost:3000"]
 
     # AI
+    GROQ_API_KEY: str = ""
+    GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
+    GROQ_MODEL: str = "openai/gpt-oss-20b"
+    GROQ_REASONING_EFFORT: str = "medium"
     ANTHROPIC_API_KEY: str = ""
     OPENAI_API_KEY: str = ""
 
     # ArmorIQ
     ARMORIQ_API_KEY: str = ""
     ARMORIQ_API_URL: str = "https://api.armoriq.ai"
+
+    @property
+    def effective_groq_api_key(self) -> str:
+        return self.GROQ_API_KEY or self.OPENAI_API_KEY
 
 
 settings = Settings()

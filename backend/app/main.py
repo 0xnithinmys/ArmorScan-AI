@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
+from app import models  # noqa: F401
 from app.core.config import settings
 from app.core.database import engine, Base
 from app.api.v1.router import api_router

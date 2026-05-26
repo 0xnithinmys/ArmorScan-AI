@@ -1,48 +1,268 @@
 """
-ArmorScan AI — LangGraph State Machine
-Phase 4 will wire all agent nodes into this graph.
+ArmorScan AI - Phase 4 LangGraph workflow.
 
-Flow:
-  START → recon_node → analysis_node → exploit_node → reporter_node → END
+This module uses a sequential fallback runner so local development still works
+even when `langgraph` is not installed yet. When the dependency is available,
+`build_graph()` also returns a compiled LangGraph graph for parity with the
+project architecture.
 """
-from langgraph.graph import StateGraph, END
-from armorscan.state import ScanState
+
+from __future__ import annotations
+
+from copy import deepcopy
+from typing import Any, Callable
+
+import httpx
+
+from armorscan.runtime import build_report, fallback_analysis, llm_client, passive_recon
+from armorscan.state import FindingDraft, ScanState
+
+try:
+    from langgraph.graph import END, StateGraph
+except Exception:  # pragma: no cover - optional runtime dependency
+    END = "__end__"
+    StateGraph = None
 
 
-def recon_node(state: ScanState) -> ScanState:
-    """Reconnaissance Agent — Phase 4"""
-    return {**state, "status": "executing", "agent_trace": state["agent_trace"] + [{"node": "recon", "status": "stub"}]}
+def append_trace(state: ScanState, *, node: str, summary: str, status: str, details: dict[str, Any]) -> ScanState:
+    next_state = deepcopy(state)
+    next_state["agent_trace"] = state["agent_trace"] + [
+        {"node": node, "status": status, "summary": summary, "details": details}
+    ]
+    next_state["status"] = status
+    return next_state
 
 
-def analysis_node(state: ScanState) -> ScanState:
-    """Vulnerability Analysis Agent — Phase 4"""
-    return {**state, "agent_trace": state["agent_trace"] + [{"node": "analysis", "status": "stub"}]}
+async def recon_node(state: ScanState) -> ScanState:
+    recon = await passive_recon(state["target_url"])
+    next_state = deepcopy(state)
+    next_state.update(recon)
+    next_state["intent_plan"] = {
+        "mode": "passive-and-safe-validation",
+        "steps": [
+            "Map reachable public routes",
+            "Render target in Chromium and extract accessibility tree",
+            "Capture forms, inputs, links, buttons, and browser network activity",
+            "Infer technology stack from headers and markup",
+            "Draft candidate findings",
+            "Run safe HTTP confirmation probes",
+        ],
+    }
+    next_state["status"] = "planning"
+    return append_trace(
+        next_state,
+        node="recon",
+        status="planning",
+        summary="Reconnaissance completed",
+        details={
+            "routes": len(next_state["discovered_routes"]),
+            "forms": len(next_state["discovered_forms"]),
+            "inputs": len(next_state["discovered_inputs"]),
+            "browser_observations": len(next_state["browser_observations"]),
+            "browser_errors": next_state["browser_errors"],
+            "technology_stack": next_state["technology_stack"],
+        },
+    )
 
 
-def exploit_node(state: ScanState) -> ScanState:
-    """Exploitation & Validation Agent — Phase 4"""
-    return {**state, "agent_trace": state["agent_trace"] + [{"node": "exploit", "status": "stub"}]}
+async def analysis_node(state: ScanState) -> ScanState:
+    drafts: list[FindingDraft] = fallback_analysis(state)
+
+    schema = {
+        "name": "armorscan_finding_drafts",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "findings_drafts": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "title": {"type": "string"},
+                            "severity": {"type": "string"},
+                            "cwe_id": {"type": ["string", "null"]},
+                            "url": {"type": "string"},
+                            "parameter": {"type": ["string", "null"]},
+                            "payload": {"type": ["string", "null"]},
+                            "evidence": {"type": ["string", "null"]},
+                            "confidence": {"type": "number"},
+                            "reproduction_steps": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                            "rationale": {"type": ["string", "null"]},
+                        },
+                        "required": [
+                            "id",
+                            "title",
+                            "severity",
+                            "cwe_id",
+                            "url",
+                            "parameter",
+                            "payload",
+                            "evidence",
+                            "confidence",
+                            "reproduction_steps",
+                            "rationale",
+                        ],
+                        "additionalProperties": False,
+                    },
+                }
+            },
+            "required": ["findings_drafts"],
+            "additionalProperties": False,
+        },
+    }
+    instructions = (
+        "You are ArmorScan AI's vulnerability analysis agent. Draft only defensive, "
+        "safe validation ideas based on the reconnaissance data. Never suggest destructive "
+        "payloads, persistence, brute force, or exfiltration. Focus on likely OWASP-style web "
+        "issues that can be checked with harmless HTTP probes."
+    )
+    input_text = (
+        f"Target: {state['target_url']}\n"
+        f"Scan type: {state['scan_type']}\n"
+        f"Routes: {state['discovered_routes']}\n"
+        f"Inputs: {state['discovered_inputs']}\n"
+        f"Forms: {state['discovered_forms']}\n"
+        f"Tech: {state['technology_stack']}\n"
+        f"Observations: {state['http_observations']}\n"
+        f"Browser observations: {state['browser_observations']}\n"
+        f"Browser errors: {state['browser_errors']}\n"
+        "Return up to 5 candidate findings."
+    )
+
+    try:
+        groq_response = await llm_client.create_structured_response(
+            instructions=instructions,
+            input_text=input_text,
+            json_schema=schema,
+        )
+        if groq_response and groq_response.get("findings_drafts"):
+            drafts = groq_response["findings_drafts"]
+    except Exception as exc:
+        state = append_trace(
+            state,
+            node="analysis_warning",
+            status=state["status"],
+            summary="Groq analysis fallback activated",
+            details={"reason": str(exc)},
+        )
+
+    next_state = deepcopy(state)
+    next_state["findings_drafts"] = drafts
+    next_state["status"] = "observing"
+    return append_trace(
+        next_state,
+        node="analysis",
+        status="observing",
+        summary="Candidate findings drafted",
+        details={"draft_count": len(drafts)},
+    )
 
 
-def reporter_node(state: ScanState) -> ScanState:
-    """Reporting & Triage Agent — Phase 4"""
-    return {**state, "status": "completed", "agent_trace": state["agent_trace"] + [{"node": "reporter", "status": "stub"}]}
+async def exploit_node(state: ScanState) -> ScanState:
+    confirmed_findings: list[dict[str, Any]] = []
+    observations = list(state["http_observations"])
+
+    for draft in state["findings_drafts"]:
+        confidence = draft["confidence"]
+        evidence = draft.get("evidence")
+        if draft.get("parameter") and draft.get("payload") and state["scan_type"] == "url":
+            try:
+                async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+                    response = await client.get(draft["url"])
+                body_excerpt = response.text[:2000]
+                observations.append(
+                    {
+                        "url": str(response.url),
+                        "status_code": response.status_code,
+                        "body_excerpt": body_excerpt[:500],
+                    }
+                )
+                if draft["payload"] in body_excerpt:
+                    confidence = min(0.98, confidence + 0.22)
+                    evidence = f"Payload reflected in response excerpt: {draft['payload']}"
+            except Exception as exc:
+                observations.append({"url": draft["url"], "error": str(exc)})
+
+        if confidence >= 0.55:
+            confirmed_findings.append(
+                {
+                    "id": draft["id"],
+                    "title": draft["title"],
+                    "severity": draft["severity"],
+                    "cwe_id": draft.get("cwe_id"),
+                    "location": draft["url"],
+                    "parameter": draft.get("parameter"),
+                    "payload": draft.get("payload"),
+                    "evidence": evidence,
+                    "confidence": int(confidence * 100),
+                    "summary": draft.get("rationale") or draft["title"],
+                    "reproduction_steps": draft.get("reproduction_steps", []),
+                }
+            )
+
+    next_state = deepcopy(state)
+    next_state["http_observations"] = observations
+    next_state["findings"] = confirmed_findings
+    next_state["status"] = "reflecting"
+    return append_trace(
+        next_state,
+        node="exploit",
+        status="reflecting",
+        summary="Safe validation completed",
+        details={"confirmed_findings": len(confirmed_findings)},
+    )
 
 
-def build_graph() -> StateGraph:
+async def reporter_node(state: ScanState) -> ScanState:
+    next_state = deepcopy(state)
+    next_state["status"] = "completed"
+    next_state = append_trace(
+        next_state,
+        node="reporter",
+        status="completed",
+        summary="Report synthesized",
+        details={"findings": len(next_state["findings"])},
+    )
+    next_state["report_json"] = build_report(next_state)
+    return next_state
+
+
+NODE_PIPELINE: list[tuple[str, Callable[[ScanState], Any]]] = [
+    ("recon", recon_node),
+    ("analysis", analysis_node),
+    ("exploit", exploit_node),
+    ("reporter", reporter_node),
+]
+
+
+async def run_scan_workflow(initial_state: ScanState) -> list[ScanState]:
+    states: list[ScanState] = []
+    current = deepcopy(initial_state)
+    current["state_graph"] = {"engine": "langgraph" if armorscan_graph is not None else "sequential"}
+    for _, node in NODE_PIPELINE:
+        current = await node(current)
+        states.append(current)
+    return states
+
+
+def build_graph():
+    if StateGraph is None:
+        return None
+
     graph = StateGraph(ScanState)
-
     graph.add_node("recon", recon_node)
     graph.add_node("analysis", analysis_node)
     graph.add_node("exploit", exploit_node)
     graph.add_node("reporter", reporter_node)
-
     graph.set_entry_point("recon")
     graph.add_edge("recon", "analysis")
     graph.add_edge("analysis", "exploit")
     graph.add_edge("exploit", "reporter")
     graph.add_edge("reporter", END)
-
     return graph.compile()
 
 

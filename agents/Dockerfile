@@ -12,4 +12,4 @@ RUN playwright install chromium --with-deps
 
 COPY . .
 
-CMD ["python", "-m", "armorscan.graph"]
+CMD ["sh", "-c", "sleep infinity"]

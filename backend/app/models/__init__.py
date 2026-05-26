@@ -1,2 +1,3 @@
-# Import all models here so Alembic auto-detects them
-# Phase 3 will add: User, Organization, Target, Scan, Finding, AuditLog, etc.
+from app.models.entities import AuditEvent, Finding, Scan, Target, User
+
+__all__ = ["AuditEvent", "Finding", "Scan", "Target", "User"]
