@@ -9,6 +9,13 @@ from app.api.deps import get_current_user
 from app.api.v1.schemas import FindingRead, ScanCreateRequest, ScanRead, TargetRead
 from app.core.database import get_db
 from app.models import AuditEvent, Scan, Target, User
+from app.services.policy import (
+    PolicyViolation,
+    build_intent_plan,
+    evaluate_scan_request,
+    require_allowed,
+    sign_intent_plan,
+)
 from app.workers.scan_worker import run_scan
 
 router = APIRouter()
@@ -48,6 +55,11 @@ async def initiate_scan(
             target_type=payload.scan_type,
             target_url=payload.target_url,
             scope=payload.scope,
+            authorization_status="verified" if payload.authorization_attestation else "pending",
+            authorization_proof_type="manual_attestation" if payload.authorization_attestation else None,
+            authorization_proof="User attested authorization during scan creation"
+            if payload.authorization_attestation
+            else None,
         )
         db.add(target)
         await db.flush()
@@ -70,6 +82,40 @@ async def initiate_scan(
     )
     db.add(scan)
     await db.flush()
+
+    policy_decision = evaluate_scan_request(scan=scan, target=target, user=current_user)
+    try:
+        require_allowed(policy_decision)
+    except PolicyViolation as exc:
+        db.add(
+            AuditEvent(
+                user_id=current_user.id,
+                target_id=target.id,
+                scan_id=scan.id,
+                event_type="policy.intent_denied",
+                message=exc.decision.reason,
+                details=exc.decision.as_dict(),
+            )
+        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=exc.decision.reason) from exc
+    scan.intent_plan = build_intent_plan(scan=scan, target=target, user=current_user)
+    scan.armoriq_token = sign_intent_plan(scan.intent_plan)
+    scan.policy_decisions = [policy_decision.as_dict()]
+
+    db.add(
+        AuditEvent(
+            user_id=current_user.id,
+            target_id=target.id,
+            scan_id=scan.id,
+            event_type="policy.intent_signed",
+            message="ArmorIQ local policy signed the scan intent plan.",
+            details={
+                "decision": policy_decision.as_dict(),
+                "allowed_hosts": scan.intent_plan["allowed_hosts"],
+                "allowed_actions": scan.intent_plan["allowed_actions"],
+            },
+        )
+    )
 
     db.add(
         AuditEvent(

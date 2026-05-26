@@ -82,6 +82,8 @@ async def download_json(
             "summary": scan.summary,
             "report_json": scan.report_json,
             "agent_trace": scan.agent_trace,
+            "intent_plan": scan.intent_plan,
+            "policy_decisions": scan.policy_decisions,
             "created_at": scan.created_at,
             "completed_at": scan.completed_at,
         },

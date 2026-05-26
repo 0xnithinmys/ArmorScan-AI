@@ -4,11 +4,33 @@ import asyncio
 from typing import Any
 from urllib.parse import urljoin
 
+from armorscan.policy import evaluate_agent_action
 from armorscan.utils import normalize_target_url
 
 
-async def run_browser_recon(target_url: str) -> dict[str, Any]:
+async def run_browser_recon(
+    target_url: str,
+    *,
+    intent_plan: dict[str, Any] | None = None,
+    token: str | None = None,
+) -> dict[str, Any]:
     target_url = normalize_target_url(target_url)
+    decision = evaluate_agent_action(
+        intent_plan=intent_plan,
+        token=token,
+        action="browser.navigate",
+        url=target_url,
+    )
+    if not decision.allowed:
+        return {
+            "routes": [],
+            "forms": [],
+            "inputs": [],
+            "observations": [],
+            "errors": [decision.reason],
+            "policy_decisions": [decision.as_dict()],
+        }
+
     try:
         from playwright.async_api import async_playwright
     except Exception as exc:
@@ -18,6 +40,7 @@ async def run_browser_recon(target_url: str) -> dict[str, Any]:
             "inputs": [],
             "observations": [],
             "errors": [f"Playwright unavailable: {exc}"],
+            "policy_decisions": [decision.as_dict()],
         }
 
     try:
@@ -99,6 +122,7 @@ async def run_browser_recon(target_url: str) -> dict[str, Any]:
                     }
                 ],
                 "errors": [],
+                "policy_decisions": [decision.as_dict()],
             }
     except Exception as exc:
         return {
@@ -107,8 +131,14 @@ async def run_browser_recon(target_url: str) -> dict[str, Any]:
             "inputs": [],
             "observations": [],
             "errors": [str(exc)],
+            "policy_decisions": [decision.as_dict()],
         }
 
 
-def run_browser_recon_sync(target_url: str) -> dict[str, Any]:
-    return asyncio.run(run_browser_recon(target_url))
+def run_browser_recon_sync(
+    target_url: str,
+    *,
+    intent_plan: dict[str, Any] | None = None,
+    token: str | None = None,
+) -> dict[str, Any]:
+    return asyncio.run(run_browser_recon(target_url, intent_plan=intent_plan, token=token))

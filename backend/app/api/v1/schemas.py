@@ -32,6 +32,7 @@ class TargetCreateRequest(BaseModel):
     target_type: Literal["url", "github", "api"] = "url"
     target_url: str = Field(min_length=3)
     scope: list[str] = Field(default_factory=list)
+    authorization_attestation: bool = False
 
 
 class TargetRead(BaseModel):
@@ -43,7 +44,13 @@ class TargetRead(BaseModel):
     target_url: str
     scope: list[str]
     authorization_status: str
+    authorization_proof_type: str | None
     created_at: datetime
+
+
+class TargetAuthorizeRequest(BaseModel):
+    proof_type: Literal["manual_attestation", "dns_txt", "meta_tag"] = "manual_attestation"
+    proof: str = Field(min_length=8)
 
 
 class ScanCreateRequest(BaseModel):
@@ -52,6 +59,7 @@ class ScanCreateRequest(BaseModel):
     target_name: str | None = None
     scan_type: Literal["url", "github", "api"] = "url"
     scope: list[str] = Field(default_factory=list)
+    authorization_attestation: bool = False
 
 
 class ScanRead(BaseModel):
@@ -67,6 +75,9 @@ class ScanRead(BaseModel):
     summary: str | None
     agent_trace: list[dict]
     report_json: dict | None
+    armoriq_token: str | None
+    intent_plan: dict | None
+    policy_decisions: list[dict]
     created_at: datetime
     started_at: datetime | None
     completed_at: datetime | None

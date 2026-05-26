@@ -442,6 +442,12 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
+**Optional scanner CLIs** (Phase 7):
+```bash
+pip install semgrep bandit
+# Install nuclei separately from ProjectDiscovery, then ensure `nuclei` is on PATH.
+```
+
 **Celery worker**:
 ```bash
 cd backend
@@ -470,8 +476,8 @@ celery -A app.core.celery_app worker --loglevel=info -Q scans
 - [x] **Phase 3** — Backend API (FastAPI + PostgreSQL)
 - [x] **Phase 4** — AI agent system (LangGraph)
 - [x] **Phase 5** — Browser automation (Playwright)
-- [ ] **Phase 6** — Policy engine (ArmorIQ)
-- [ ] **Phase 7** — Scanning engines (Nuclei, Semgrep, Bandit)
+- [x] **Phase 6** — Policy engine (ArmorIQ)
+- [x] **Phase 7** — Scanning engines (Nuclei, Semgrep, Bandit)
 - [ ] **Phase 8** — Risk scoring & reporting engine
 - [ ] **Phase 9** — CI/CD integration
 - [ ] **Phase 10** — Production deployment (K8s)

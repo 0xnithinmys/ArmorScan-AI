@@ -45,7 +45,9 @@ class Target(Base):
     target_type: Mapped[str] = mapped_column(String(32), default="url")
     target_url: Mapped[str] = mapped_column(Text)
     scope: Mapped[list[str]] = mapped_column(JSON, default=list)
-    authorization_status: Mapped[str] = mapped_column(String(32), default="verified")
+    authorization_status: Mapped[str] = mapped_column(String(32), default="pending")
+    authorization_proof_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    authorization_proof: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=now_utc, server_default=func.now()
     )
@@ -72,6 +74,9 @@ class Scan(Base):
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     agent_trace: Mapped[list[dict]] = mapped_column(JSON, default=list)
     report_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    armoriq_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    intent_plan: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    policy_decisions: Mapped[list[dict]] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=now_utc, server_default=func.now()
     )

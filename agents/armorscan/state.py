@@ -35,9 +35,15 @@ class ScanState(TypedDict):
     technology_stack: List[str]
     state_graph: Optional[dict]
 
+    # Scanner engine outputs
+    engine_observations: List[dict]
+    engine_findings: List[dict]
+    engine_errors: List[str]
+
     # Planning outputs
     intent_plan: Optional[dict]
     armoriq_token: Optional[str]
+    policy_decisions: List[dict]
     http_observations: List[dict]
 
     # Exploitation outputs

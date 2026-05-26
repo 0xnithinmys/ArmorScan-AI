@@ -33,8 +33,12 @@ def _initial_state(scan_id: str, target_url: str, scan_type: str) -> dict:
         "browser_errors": [],
         "technology_stack": [],
         "state_graph": None,
+        "engine_observations": [],
+        "engine_findings": [],
+        "engine_errors": [],
         "intent_plan": None,
         "armoriq_token": None,
+        "policy_decisions": [],
         "http_observations": [],
         "findings_drafts": [],
         "findings": [],
@@ -53,6 +57,7 @@ async def _persist_scan_progress(scan_id: str, state: dict) -> None:
         scan.status = state["status"]
         scan.agent_trace = state["agent_trace"]
         scan.report_json = state.get("report_json")
+        scan.policy_decisions = state.get("policy_decisions", scan.policy_decisions)
         if state["agent_trace"]:
             scan.summary = state["agent_trace"][-1]["summary"]
         await session.commit()
@@ -67,10 +72,12 @@ async def _persist_final_results(scan_id: str, state: dict) -> None:
         scan.status = state["status"]
         scan.agent_trace = state["agent_trace"]
         scan.report_json = state.get("report_json")
+        scan.policy_decisions = state.get("policy_decisions", [])
         summary = state.get("report_json", {}).get("summary", {})
         scan.summary = (
-            f"Phase 4 completed with {summary.get('findings_count', 0)} findings "
-            f"across {summary.get('routes_discovered', 0)} routes."
+            f"Governed scan completed with {summary.get('findings_count', 0)} findings, "
+            f"{summary.get('engine_findings', 0)} scanner findings, "
+            f"and {summary.get('routes_discovered', 0)} routes."
         )
         scan.completed_at = datetime.now(timezone.utc)
 
@@ -99,9 +106,13 @@ async def _persist_final_results(scan_id: str, state: dict) -> None:
                 scan_id=scan_id,
                 target_id=scan.target_id,
                 user_id=scan.requested_by_id,
-                event_type="scan.phase4_completed",
-                message="LangGraph workflow completed and findings were persisted.",
-                details={"findings": len(state["findings"])},
+                event_type="scan.workflow_completed",
+                message="Governed agent workflow completed with scanner engines and findings were persisted.",
+                details={
+                    "findings": len(state["findings"]),
+                    "engine_findings": len(state.get("engine_findings", [])),
+                    "policy_decisions": len(scan.policy_decisions),
+                },
             )
         )
         await session.commit()
@@ -120,8 +131,8 @@ async def _mark_scan_failed(scan_id: str, error: str) -> None:
                 scan_id=scan_id,
                 target_id=scan.target_id,
                 user_id=scan.requested_by_id,
-                event_type="scan.phase4_failed",
-                message="Phase 4 workflow failed.",
+                event_type="scan.workflow_failed",
+                message="Governed workflow failed.",
                 details={"error": error},
             )
         )
@@ -131,7 +142,15 @@ async def _mark_scan_failed(scan_id: str, error: str) -> None:
 async def _run_scan_async(scan_id: str, target_url: str, scan_type: str) -> dict:
     from armorscan.graph import run_scan_workflow
 
-    states = await run_scan_workflow(_initial_state(scan_id, target_url, scan_type))
+    initial_state = _initial_state(scan_id, target_url, scan_type)
+    async with AsyncSessionLocal() as session:
+        scan = await session.get(Scan, scan_id)
+        if scan is not None:
+            initial_state["armoriq_token"] = scan.armoriq_token
+            initial_state["intent_plan"] = scan.intent_plan
+            initial_state["policy_decisions"] = scan.policy_decisions or []
+
+    states = await run_scan_workflow(initial_state)
     for state in states:
         await _persist_scan_progress(scan_id, state)
         await publish_scan_event(
@@ -150,13 +169,13 @@ async def _run_scan_async(scan_id: str, target_url: str, scan_type: str) -> dict
         "scan_id": scan_id,
         "status": final_state["status"],
         "findings_count": len(final_state["findings"]),
-        "message": "Phase 4 LangGraph workflow completed.",
+        "message": "Governed LangGraph workflow completed.",
     }
 
 
 @celery_app.task(bind=True, name="app.workers.scan_worker.run_scan", max_retries=2)
 def run_scan(self, scan_id: str, target_url: str, scan_type: str = "url"):
-    logger.info("[Scan %s] Starting Phase 4 workflow for %s", scan_id, target_url)
+    logger.info("[Scan %s] Starting governed workflow for %s", scan_id, target_url)
     try:
         return asyncio.run(_run_scan_async(scan_id, target_url, scan_type))
     except Exception as exc:  # pragma: no cover

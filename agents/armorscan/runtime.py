@@ -7,6 +7,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 
 from armorscan.llm import GroqResponsesClient
+from armorscan.policy import evaluate_agent_action
 from armorscan.state import FindingDraft, ScanState
 from armorscan.tools.playwright_tools import run_browser_recon
 from armorscan.utils import normalize_target_url
@@ -19,15 +20,30 @@ def _host_label(target_url: str) -> str:
     return parsed.netloc or parsed.path
 
 
-async def passive_recon(target_url: str) -> dict[str, Any]:
+async def passive_recon(
+    target_url: str,
+    *,
+    intent_plan: dict[str, Any] | None,
+    token: str | None,
+) -> dict[str, Any]:
     target_url = normalize_target_url(target_url)
     observations: list[dict[str, Any]] = []
+    policy_decisions: list[dict[str, Any]] = []
     routes = [urljoin(target_url.rstrip("/") + "/", path.lstrip("/")) for path in COMMON_PATHS]
     tech_stack: list[str] = []
     forms: list[dict[str, Any]] = []
     inputs: list[dict[str, Any]] = []
 
+    http_decision = evaluate_agent_action(
+        intent_plan=intent_plan,
+        token=token,
+        action="http.get",
+        url=target_url,
+    )
+    policy_decisions.append(http_decision.as_dict())
     try:
+        if not http_decision.allowed:
+            raise PermissionError(http_decision.reason)
         async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
             response = await client.get(target_url)
         body = response.text[:8000]
@@ -59,7 +75,8 @@ async def passive_recon(target_url: str) -> dict[str, Any]:
     except Exception as exc:
         observations.append({"url": target_url, "error": str(exc)})
 
-    browser_recon = await run_browser_recon(target_url)
+    browser_recon = await run_browser_recon(target_url, intent_plan=intent_plan, token=token)
+    policy_decisions.extend(browser_recon.get("policy_decisions", []))
     routes.extend(browser_recon["routes"])
     forms.extend(browser_recon["forms"])
     inputs.extend(browser_recon["inputs"])
@@ -70,6 +87,7 @@ async def passive_recon(target_url: str) -> dict[str, Any]:
         "discovered_inputs": inputs[:20],
         "browser_observations": browser_recon["observations"],
         "browser_errors": browser_recon["errors"],
+        "policy_decisions": policy_decisions,
         "technology_stack": list(dict.fromkeys([item for item in tech_stack if item])),
         "http_observations": observations,
     }
@@ -81,6 +99,10 @@ def fallback_analysis(state: ScanState) -> list[FindingDraft]:
     body = " ".join(str(obs.get("body_excerpt", "")) for obs in state["http_observations"])
     headers = " ".join(str(obs.get("headers", {})) for obs in state["http_observations"])
     browser_text = " ".join(str(obs.get("accessibility_tree", "")) for obs in state["browser_observations"])
+    engine_text = " ".join(
+        f"{finding.get('title')} {finding.get('summary')} {finding.get('evidence')}"
+        for finding in state.get("engine_findings", [])
+    )
 
     if "x-powered-by" in headers.lower() or "server" in headers.lower():
         drafts.append(
@@ -179,6 +201,26 @@ def fallback_analysis(state: ScanState) -> list[FindingDraft]:
             }
         )
 
+    if engine_text:
+        drafts.append(
+            {
+                "id": "scanner-engine-correlation",
+                "title": "Scanner engine findings require analyst review",
+                "severity": "info",
+                "cwe_id": None,
+                "url": state["target_url"],
+                "parameter": None,
+                "payload": None,
+                "evidence": engine_text[:500],
+                "confidence": 0.7,
+                "reproduction_steps": [
+                    "Review normalized scanner findings in the report.",
+                    "Confirm exploitability and business impact before remediation prioritization.",
+                ],
+                "rationale": "Nuclei/SAST scanner evidence was collected and should be correlated with agent observations.",
+            }
+        )
+
     return drafts
 
 
@@ -197,12 +239,18 @@ def build_report(state: ScanState) -> dict[str, Any]:
             "forms_discovered": len(state["discovered_forms"]),
             "inputs_discovered": len(state["discovered_inputs"]),
             "browser_observations": len(state["browser_observations"]),
+            "engine_observations": len(state.get("engine_observations", [])),
+            "engine_findings": len(state.get("engine_findings", [])),
             "findings_count": len(state["findings"]),
             "severity_counts": severity_counts,
         },
         "technology_stack": state["technology_stack"],
         "browser_errors": state["browser_errors"],
+        "engine_observations": state.get("engine_observations", []),
+        "engine_findings": state.get("engine_findings", []),
+        "engine_errors": state.get("engine_errors", []),
         "intent_plan": state["intent_plan"],
+        "policy_decisions": state["policy_decisions"],
         "findings": state["findings"],
         "agent_trace": state["agent_trace"],
     }
