@@ -1,20 +1,27 @@
 import asyncio
 import json
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 from redis.asyncio import Redis
+from sqlalchemy import select
 
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
-from app.models import Scan
+from app.core.security import decode_access_token
+from app.models import Scan, User
 from app.services.event_bus import scan_channel
 
 router = APIRouter()
 
 
 @router.websocket("/scans/{scan_id}/stream")
-async def scan_stream(websocket: WebSocket, scan_id: str):
+async def scan_stream(websocket: WebSocket, scan_id: str, token: str | None = None):
     await websocket.accept()
+    if not await _websocket_can_access_scan(scan_id, token):
+        await websocket.send_text(json.dumps({"scan_id": scan_id, "status": "unauthorized"}))
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
     redis = None
     try:
         try:
@@ -61,3 +68,18 @@ async def scan_stream(websocket: WebSocket, scan_id: str):
     finally:
         if redis is not None:
             await redis.aclose()
+
+
+async def _websocket_can_access_scan(scan_id: str, token: str | None) -> bool:
+    if not token:
+        return False
+    payload = decode_access_token(token)
+    if not payload or not payload.get("sub"):
+        return False
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(User).where(User.email == payload["sub"]))
+        user = result.scalar_one_or_none()
+        if user is None or not user.is_active:
+            return False
+        scan = await session.get(Scan, scan_id)
+        return scan is not None and scan.requested_by_id == user.id

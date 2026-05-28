@@ -25,6 +25,7 @@ async def register(payload: UserRegisterRequest, db: AsyncSession = Depends(get_
     )
     db.add(user)
     await db.flush()
+    await db.commit()
     return {"message": "User registered", "user": UserRead.model_validate(user)}
 
 

@@ -1,25 +1,26 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
+
 from app import models  # noqa: F401
-from app.core.config import settings
-from app.core.database import engine, Base
 from app.api.v1.router import api_router
+from app.core.config import settings
+from app.core.database import engine
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: try to create tables, but don't crash if DB is unreachable
+    # Migrations own schema changes; startup only verifies connectivity.
     try:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        print("[startup] Database connected and tables synced.")
-    except Exception as e:
-        print(f"[startup] WARNING: Could not connect to database: {e}")
-        print("[startup] Server will start anyway — DB-dependent endpoints may fail.")
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        print("[startup] Database connected.")
+    except Exception as exc:
+        print(f"[startup] WARNING: Could not connect to database: {exc}")
+        print("[startup] Server will start anyway; DB-dependent endpoints may fail.")
     yield
-    # Shutdown
     try:
         await engine.dispose()
     except Exception:

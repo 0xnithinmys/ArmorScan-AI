@@ -130,7 +130,9 @@ def verify_intent_token(token: str) -> dict[str, Any] | None:
         if not hmac.compare_digest(_b64url(expected.digest()), signature):
             return None
         intent_plan = json.loads(_decode_b64url(payload))
-        expires_at = datetime.fromisoformat(intent_plan["expires_at"])
+        expires_at = datetime.fromisoformat(str(intent_plan["expires_at"]).replace("Z", "+00:00"))
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
         if expires_at < datetime.now(timezone.utc):
             return None
         return intent_plan

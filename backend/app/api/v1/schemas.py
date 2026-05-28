@@ -28,7 +28,7 @@ class UserRead(BaseModel):
 
 
 class TargetCreateRequest(BaseModel):
-    name: str = Field(min_length=2, max_length=255)
+    name: str | None = Field(default=None, max_length=255)
     target_type: Literal["url", "github", "api"] = "url"
     target_url: str = Field(min_length=3)
     scope: list[str] = Field(default_factory=list)

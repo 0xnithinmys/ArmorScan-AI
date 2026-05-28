@@ -1,13 +1,20 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from urllib.parse import urlparse
 
 from app.api.deps import get_current_user
 from app.api.v1.schemas import TargetAuthorizeRequest, TargetCreateRequest, TargetRead
 from app.core.database import get_db
-from app.models import Target, User
+from app.models import AuditEvent, Target, User
 
 router = APIRouter()
+
+
+def _target_name_from_url(value: str) -> str:
+    parsed = urlparse(value if "://" in value else f"https://{value}")
+    host_or_path = parsed.hostname or parsed.path.strip("/\\") or "target"
+    return host_or_path[:255]
 
 
 @router.get("/", response_model=list[TargetRead])
@@ -29,7 +36,7 @@ async def create_target(
 ):
     target = Target(
         owner_id=current_user.id,
-        name=payload.name,
+        name=(payload.name or "").strip() or _target_name_from_url(payload.target_url),
         target_type=payload.target_type,
         target_url=payload.target_url,
         scope=payload.scope,
@@ -41,6 +48,21 @@ async def create_target(
     )
     db.add(target)
     await db.flush()
+    db.add(
+        AuditEvent(
+            user_id=current_user.id,
+            target_id=target.id,
+            event_type="target.created",
+            message=f"Target {target.target_url} created.",
+            details={
+                "target_type": target.target_type,
+                "authorization_status": target.authorization_status,
+                "scope": target.scope,
+            },
+        )
+    )
+    await db.commit()
+    await db.refresh(target)
     return TargetRead.model_validate(target)
 
 
@@ -57,7 +79,17 @@ async def delete_target(
     if target is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target not found")
 
+    db.add(
+        AuditEvent(
+            user_id=current_user.id,
+            target_id=target.id,
+            event_type="target.deleted",
+            message=f"Target {target.target_url} deleted.",
+            details={"target_id": target.id},
+        )
+    )
     await db.delete(target)
+    await db.commit()
 
 
 @router.post("/{target_id}/authorize", response_model=TargetRead)
@@ -84,4 +116,15 @@ async def authorize_target(
     target.authorization_proof_type = payload.proof_type
     target.authorization_proof = payload.proof
     await db.flush()
+    db.add(
+        AuditEvent(
+            user_id=current_user.id,
+            target_id=target.id,
+            event_type="target.authorized",
+            message=f"Target {target.target_url} authorization verified.",
+            details={"proof_type": payload.proof_type},
+        )
+    )
+    await db.commit()
+    await db.refresh(target)
     return TargetRead.model_validate(target)

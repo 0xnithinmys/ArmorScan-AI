@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
@@ -19,6 +20,12 @@ from app.services.policy import (
 from app.workers.scan_worker import run_scan
 
 router = APIRouter()
+
+
+def _target_name_from_url(value: str) -> str:
+    parsed = urlparse(value if "://" in value else f"https://{value}")
+    host_or_path = parsed.hostname or parsed.path.strip("/\\") or "target"
+    return host_or_path[:255]
 
 
 @router.get("/", response_model=list[ScanRead])
@@ -48,10 +55,10 @@ async def initiate_scan(
         target = result.scalar_one_or_none()
         if target is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target not found")
-    elif payload.target_url and payload.target_name:
+    elif payload.target_url:
         target = Target(
             owner_id=current_user.id,
-            name=payload.target_name,
+            name=(payload.target_name or "").strip() or _target_name_from_url(payload.target_url),
             target_type=payload.scan_type,
             target_url=payload.target_url,
             scope=payload.scope,
@@ -66,7 +73,7 @@ async def initiate_scan(
     else:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Provide either target_id or both target_url and target_name",
+            detail="Provide either target_id or target_url",
         )
 
     scan = Scan(
@@ -97,6 +104,7 @@ async def initiate_scan(
                 details=exc.decision.as_dict(),
             )
         )
+        await db.commit()
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=exc.decision.reason) from exc
     scan.intent_plan = build_intent_plan(scan=scan, target=target, user=current_user)
     scan.armoriq_token = sign_intent_plan(scan.intent_plan)
@@ -128,6 +136,10 @@ async def initiate_scan(
         )
     )
 
+    await db.commit()
+    await db.refresh(scan)
+    await db.refresh(target)
+
     try:
         task = run_scan.delay(scan_id=scan.id, target_url=target.target_url, scan_type=scan.scan_type)
         scan.celery_task_id = task.id
@@ -141,6 +153,8 @@ async def initiate_scan(
                 details={"celery_task_id": task.id},
             )
         )
+        await db.commit()
+        await db.refresh(scan)
     except Exception as exc:
         scan.summary = f"Worker dispatch unavailable; scan remains queued. Reason: {exc}"
         db.add(
@@ -153,7 +167,8 @@ async def initiate_scan(
                 details={"reason": str(exc)},
             )
         )
-
+        await db.commit()
+        await db.refresh(scan)
     return {"scan": ScanRead.model_validate(scan), "target": TargetRead.model_validate(target)}
 
 
@@ -219,4 +234,5 @@ async def cancel_scan(
             details=None,
         )
     )
+    await db.commit()
     return ScanRead.model_validate(scan)

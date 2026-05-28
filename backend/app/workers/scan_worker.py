@@ -28,6 +28,7 @@ def _initial_state(scan_id: str, target_url: str, scan_type: str) -> dict:
         "target_url": target_url,
         "scan_type": scan_type,
         "status": "idle",
+        "scan_plan": None,
         "discovered_routes": [],
         "discovered_forms": [],
         "discovered_inputs": [],
@@ -38,6 +39,7 @@ def _initial_state(scan_id: str, target_url: str, scan_type: str) -> dict:
         "engine_observations": [],
         "engine_findings": [],
         "engine_errors": [],
+        "evidence_summary": None,
         "intent_plan": None,
         "armoriq_token": None,
         "policy_decisions": [],
@@ -194,6 +196,15 @@ async def _run_scan_async(scan_id: str, target_url: str, scan_type: str) -> dict
         )
 
     final_state = states[-1]
+    if final_state["status"] == "failed":
+        await _mark_scan_failed(scan_id, final_state.get("error") or "Agent workflow failed.")
+        return {
+            "scan_id": scan_id,
+            "status": "failed",
+            "findings_count": len(final_state.get("findings", [])),
+            "message": final_state.get("error") or "Agent workflow failed.",
+        }
+
     await _persist_final_results(scan_id, final_state)
     return {
         "scan_id": scan_id,
