@@ -448,6 +448,12 @@ pip install semgrep bandit
 # Install nuclei separately from ProjectDiscovery, then ensure `nuclei` is on PATH.
 ```
 
+**Report exports** (Phase 8):
+- JSON: `GET /api/v1/reports/{scan_id}/json`
+- SARIF: `GET /api/v1/reports/{scan_id}/sarif`
+- PDF: `GET /api/v1/reports/{scan_id}/pdf`
+- Markdown: `GET /api/v1/reports/{scan_id}/markdown`
+
 **Celery worker**:
 ```bash
 cd backend
@@ -478,7 +484,7 @@ celery -A app.core.celery_app worker --loglevel=info -Q scans
 - [x] **Phase 5** — Browser automation (Playwright)
 - [x] **Phase 6** — Policy engine (ArmorIQ)
 - [x] **Phase 7** — Scanning engines (Nuclei, Semgrep, Bandit)
-- [ ] **Phase 8** — Risk scoring & reporting engine
+- [x] **Phase 8** — Risk scoring & reporting engine
 - [ ] **Phase 9** — CI/CD integration
 - [ ] **Phase 10** — Production deployment (K8s)
 - [ ] **Phase 11** — Testing & QA

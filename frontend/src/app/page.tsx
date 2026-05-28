@@ -1,467 +1,773 @@
-const pipelineMetrics = [
-  {
-    label: "Active scans",
-    value: "12",
-    detail: "+3 in the last hour",
-  },
-  {
-    label: "Critical findings",
-    value: "04",
-    detail: "2 need triage now",
-  },
-  {
-    label: "Mean validation",
-    value: "93%",
-    detail: "AI-confirmed confidence",
-  },
-  {
-    label: "Policies enforced",
-    value: "128",
-    detail: "0 fail-open events",
-  },
-];
+"use client";
 
-const scanQueue = [
-  {
-    name: "prod.customer-portal.app",
-    mode: "Dynamic web audit",
-    status: "Running",
-    progress: 74,
-    eta: "11 min",
-    risk: "High",
-  },
-  {
-    name: "staging.api-gateway.internal",
-    mode: "API misuse sweep",
-    status: "Queued",
-    progress: 18,
-    eta: "23 min",
-    risk: "Moderate",
-  },
-  {
-    name: "github.com/acme/payments-ui",
-    mode: "Repo code review",
-    status: "Reviewing",
-    progress: 91,
-    eta: "4 min",
-    risk: "Critical",
-  },
-];
+import { FormEvent, useCallback, useEffect, useState, useTransition } from "react";
+import type { ReactNode } from "react";
 
-const findings = [
-  {
-    severity: "Critical",
-    title: "Reflected XSS on invoice search",
-    location: "/billing/invoices?query=",
-    confidence: "96%",
-    summary: "Payload reflected in DOM after client-side decoding path.",
-  },
-  {
-    severity: "High",
-    title: "Potential BOLA on account export endpoint",
-    location: "POST /api/v1/accounts/export",
-    confidence: "91%",
-    summary: "Cross-tenant object IDs accepted without ownership validation.",
-  },
-  {
-    severity: "Medium",
-    title: "Leaky stack trace on auth callback",
-    location: "/oauth/callback",
-    confidence: "88%",
-    summary: "Unhandled exception discloses framework and package metadata.",
-  },
-];
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ??
+  "http://localhost:8000/api/v1";
 
-const auditEvents = [
-  "ArmorIQ signed intent plan for prod.customer-portal.app",
-  "Playwright crawler discovered 43 reachable interactive nodes",
-  "Payload verifier blocked one out-of-scope redirect attempt",
-  "Report synthesizer generated SARIF and JSON artifacts",
-];
+type ApiError = { detail?: string };
+type User = {
+  id: string;
+  email: string;
+  full_name: string;
+  is_active: boolean;
+  created_at: string;
+};
+type Target = {
+  id: string;
+  name: string;
+  target_type: "url" | "github" | "api" | string;
+  target_url: string;
+  scope: string[];
+  authorization_status: string;
+  authorization_proof_type: string | null;
+  created_at: string;
+};
+type Scan = {
+  id: string;
+  target_id: string;
+  requested_by_id: string;
+  scan_type: string;
+  status: string;
+  scope: string[];
+  celery_task_id: string | null;
+  summary: string | null;
+  agent_trace: Array<Record<string, unknown>>;
+  report_json: Record<string, unknown> | null;
+  armoriq_token: string | null;
+  intent_plan: Record<string, unknown> | null;
+  policy_decisions: Array<Record<string, unknown>>;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+};
+type Finding = {
+  id: string;
+  scan_id: string;
+  severity: string;
+  title: string;
+  location: string;
+  confidence: number;
+  risk_score: number;
+  risk_rating: string;
+  status: string;
+  summary: string;
+  business_impact: string | null;
+  remediation: string | null;
+  risk_factors: Record<string, unknown>;
+  reproduction_steps: string[];
+  created_at: string;
+};
+type AuditEvent = {
+  id: string;
+  user_id: string | null;
+  target_id: string | null;
+  scan_id: string | null;
+  event_type: string;
+  message: string;
+  details: Record<string, unknown> | null;
+  created_at: string;
+};
 
-const sideNav = [
-  "Mission Control",
-  "Targets",
-  "Live Scans",
-  "Findings",
-  "Policies",
-  "Reports",
-  "Audit Trail",
-];
+type ScanCreateResponse = { scan: Scan; target: Target };
 
-function getSeverityStyle(severity: string) {
-  switch (severity) {
-    case "Critical":
-      return "bg-[#5f1919] text-[#ffb3ad] ring-1 ring-[#8d2d2d]";
-    case "High":
-      return "bg-[#5e3512] text-[#ffd8ad] ring-1 ring-[#8c531f]";
-    case "Medium":
-      return "bg-[#3f4216] text-[#e9f29f] ring-1 ring-[#646a26]";
-    default:
-      return "bg-white/10 text-white/80 ring-1 ring-white/10";
+const emptyTargetForm = {
+  name: "",
+  target_type: "url",
+  target_url: "",
+  scope: "",
+  authorization_attestation: true,
+};
+
+const emptyScanForm = {
+  target_id: "",
+  target_name: "",
+  target_url: "",
+  scan_type: "url",
+  scope: "",
+  authorization_attestation: true,
+};
+
+function authHeaders(token: string) {
+  return { Authorization: `Bearer ${token}` };
+}
+
+function splitScope(value: string) {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+async function readError(response: Response) {
+  try {
+    const body = (await response.json()) as ApiError;
+    return body.detail || `${response.status} ${response.statusText}`;
+  } catch {
+    return `${response.status} ${response.statusText}`;
   }
 }
 
-function getStatusStyle(status: string) {
-  switch (status) {
-    case "Running":
-      return "text-[#9ef3cf]";
-    case "Reviewing":
-      return "text-[#ffd38f]";
+function severityStyle(value: string) {
+  switch (value.toLowerCase()) {
+    case "critical":
+      return "border-[#ff7c70]/40 bg-[#5f1919] text-[#ffb3ad]";
+    case "high":
+      return "border-[#ffb15f]/40 bg-[#5e3512] text-[#ffd8ad]";
+    case "medium":
+      return "border-[#e2eb72]/40 bg-[#3f4216] text-[#eef5a3]";
+    case "low":
+      return "border-[#8bd8ff]/35 bg-[#16364a] text-[#b9e7ff]";
     default:
-      return "text-[#b9c4ff]";
+      return "border-white/10 bg-white/8 text-white/70";
   }
+}
+
+function statusStyle(value: string) {
+  switch (value.toLowerCase()) {
+    case "completed":
+    case "verified":
+      return "text-[#9ef3cf]";
+    case "queued":
+    case "planning":
+    case "executing":
+    case "observing":
+    case "reflecting":
+      return "text-[#ffd38f]";
+    case "failed":
+    case "cancelled":
+    case "pending":
+      return "text-[#ffaaa4]";
+    default:
+      return "text-white/60";
+  }
+}
+
+function shortId(value: string) {
+  return value.slice(0, 8);
 }
 
 export default function Home() {
+  const [token, setToken] = useState(() =>
+    typeof window === "undefined" ? "" : window.localStorage.getItem("armorscan_token") || "",
+  );
+  const [user, setUser] = useState<User | null>(null);
+  const [targets, setTargets] = useState<Target[]>([]);
+  const [scans, setScans] = useState<Scan[]>([]);
+  const [findings, setFindings] = useState<Finding[]>([]);
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
+  const [selectedScanId, setSelectedScanId] = useState("");
+  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [authForm, setAuthForm] = useState({
+    email: "",
+    password: "",
+    full_name: "",
+  });
+  const [targetForm, setTargetForm] = useState(emptyTargetForm);
+  const [scanForm, setScanForm] = useState(emptyScanForm);
+  const [message, setMessage] = useState("Connect to the backend to load live ArmorScan data.");
+  const [error, setError] = useState("");
+  const [isPending, startTransition] = useTransition();
+
+  async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
+    const response = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers: {
+        ...(token ? authHeaders(token) : {}),
+        ...(options.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
+        ...options.headers,
+      },
+    });
+    if (!response.ok) {
+      throw new Error(await readError(response));
+    }
+    if (response.status === 204) {
+      return undefined as T;
+    }
+    return (await response.json()) as T;
+  }
+
+  const refreshData = useCallback(async (activeToken = token) => {
+    if (!activeToken) return;
+    setError("");
+    const request = async <T,>(path: string) => {
+      const response = await fetch(`${API_BASE}${path}`, {
+        headers: authHeaders(activeToken),
+      });
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+      return (await response.json()) as T;
+    };
+
+    const [me, nextTargets, nextScans, nextFindings, nextAuditEvents] = await Promise.all([
+      request<User>("/auth/me"),
+      request<Target[]>("/targets/"),
+      request<Scan[]>("/scans/"),
+      request<Finding[]>("/findings/"),
+      request<AuditEvent[]>("/audit/?limit=75"),
+    ]);
+    setUser(me);
+    setTargets(nextTargets);
+    setScans(nextScans);
+    setFindings(nextFindings);
+    setAuditEvents(nextAuditEvents);
+    setSelectedScanId((current) => current || nextScans[0]?.id || "");
+    setMessage(`Live backend sync complete for ${me.email}.`);
+  }, [token]);
+
+  useEffect(() => {
+    if (!token) return;
+    startTransition(() => {
+      refreshData(token).catch((err: Error) => {
+        setError(err.message);
+        window.localStorage.removeItem("armorscan_token");
+        setToken("");
+      });
+    });
+  }, [refreshData, token]);
+
+  async function handleAuth(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError("");
+    try {
+      if (authMode === "register") {
+        await fetch(`${API_BASE}/auth/register`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(authForm),
+        }).then(async (response) => {
+          if (!response.ok) throw new Error(await readError(response));
+        });
+      }
+
+      const formData = new FormData();
+      formData.set("username", authForm.email);
+      formData.set("password", authForm.password);
+      const response = await fetch(`${API_BASE}/auth/login`, {
+        method: "POST",
+        body: formData,
+      });
+      if (!response.ok) throw new Error(await readError(response));
+      const body = (await response.json()) as { access_token: string };
+      window.localStorage.setItem("armorscan_token", body.access_token);
+      setToken(body.access_token);
+      await refreshData(body.access_token);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Authentication failed");
+    }
+  }
+
+  async function createTarget(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError("");
+    try {
+      await api<Target>("/targets/", {
+        method: "POST",
+        body: JSON.stringify({
+          ...targetForm,
+          scope: splitScope(targetForm.scope),
+        }),
+      });
+      setTargetForm(emptyTargetForm);
+      await refreshData();
+      setMessage("Target created and synced from backend.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Target creation failed");
+    }
+  }
+
+  async function authorizeTarget(targetId: string) {
+    setError("");
+    try {
+      await api<Target>(`/targets/${targetId}/authorize`, {
+        method: "POST",
+        body: JSON.stringify({
+          proof_type: "manual_attestation",
+          proof: "I_AM_AUTHORIZED",
+        }),
+      });
+      await refreshData();
+      setMessage("Target authorization verified with backend policy.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Authorization failed");
+    }
+  }
+
+  async function deleteTarget(targetId: string) {
+    setError("");
+    try {
+      await api<void>(`/targets/${targetId}`, { method: "DELETE" });
+      await refreshData();
+      setMessage("Target deleted.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Delete failed");
+    }
+  }
+
+  async function createScan(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError("");
+    try {
+      const payload =
+        scanForm.target_id === "__new__"
+          ? {
+              target_name: scanForm.target_name,
+              target_url: scanForm.target_url,
+              scan_type: scanForm.scan_type,
+              scope: splitScope(scanForm.scope),
+              authorization_attestation: scanForm.authorization_attestation,
+            }
+          : {
+              target_id: scanForm.target_id,
+              scan_type: scanForm.scan_type,
+              scope: splitScope(scanForm.scope),
+              authorization_attestation: scanForm.authorization_attestation,
+            };
+      const response = await api<ScanCreateResponse>("/scans/", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      setSelectedScanId(response.scan.id);
+      setScanForm(emptyScanForm);
+      await refreshData();
+      setMessage("Scan queued. If Redis/Celery is online, the worker will pick it up.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Scan creation failed");
+    }
+  }
+
+  async function updateFindingStatus(findingId: string, status: string) {
+    setError("");
+    try {
+      await api<Finding>(`/findings/${findingId}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({ status }),
+      });
+      await refreshData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Finding update failed");
+    }
+  }
+
+  async function cancelScan(scanId: string) {
+    setError("");
+    try {
+      await api<Scan>(`/scans/${scanId}/cancel`, { method: "POST" });
+      await refreshData();
+      setMessage("Scan cancelled.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Cancel failed");
+    }
+  }
+
+  async function downloadReport(kind: "json" | "sarif" | "pdf" | "markdown") {
+    if (!selectedScanId) return;
+    setError("");
+    try {
+      const response = await fetch(`${API_BASE}/reports/${selectedScanId}/${kind}`, {
+        headers: authHeaders(token),
+      });
+      if (!response.ok) throw new Error(await readError(response));
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `armorscan-${selectedScanId}.${kind === "markdown" ? "md" : kind}`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Report download failed");
+    }
+  }
+
+  const selectedScan = scans.find((scan) => scan.id === selectedScanId) ?? scans[0];
+  const selectedTarget = selectedScan
+    ? targets.find((target) => target.id === selectedScan.target_id)
+    : targets[0];
+  const selectedReport = selectedScan?.report_json?.risk_report as
+    | { executive_summary?: { overall_risk_score?: number; overall_risk_rating?: string } }
+    | undefined;
+  const activeFindings = selectedScan
+    ? findings.filter((finding) => finding.scan_id === selectedScan.id)
+    : findings;
+  const liveStatuses = new Set(["queued", "planning", "executing", "observing", "reflecting"]);
+  const metrics = [
+    { label: "Targets", value: targets.length, detail: `${targets.filter((t) => t.authorization_status === "verified").length} verified` },
+    { label: "Scans", value: scans.length, detail: `${scans.filter((scan) => liveStatuses.has(scan.status)).length} active` },
+    { label: "Findings", value: findings.length, detail: `${findings.filter((finding) => finding.risk_rating === "critical").length} critical` },
+    { label: "Policy events", value: auditEvents.filter((event) => event.event_type.startsWith("policy.")).length, detail: "ArmorIQ enforced" },
+  ];
+
   return (
-    <main className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(153,209,178,0.18),_transparent_28%),radial-gradient(circle_at_top_right,_rgba(87,129,255,0.14),_transparent_26%),linear-gradient(180deg,_#07111f_0%,_#0b1424_42%,_#09101b_100%)] text-[#f7f4ea]">
-      <div className="mx-auto flex min-h-screen max-w-[1600px] gap-6 px-4 py-4 sm:px-6 lg:px-8">
-        <aside className="hidden w-[260px] shrink-0 flex-col rounded-[28px] border border-white/10 bg-white/6 p-5 shadow-[0_20px_80px_rgba(0,0,0,0.35)] backdrop-blur md:flex">
-          <div className="mb-8">
-            <p className="text-xs uppercase tracking-[0.35em] text-[#8db39d]">
-              ArmorScan AI
-            </p>
-            <h1 className="mt-3 text-2xl font-semibold tracking-tight text-white">
-              Security audit cockpit
-            </h1>
-            <p className="mt-3 text-sm leading-6 text-white/65">
-              Governed AI scanning for repos, web apps, and APIs with real-time
-              policy enforcement.
-            </p>
+    <main className="min-h-screen bg-[radial-gradient(circle_at_12%_8%,rgba(215,242,102,0.2),transparent_24%),radial-gradient(circle_at_84%_0%,rgba(90,179,255,0.18),transparent_26%),linear-gradient(180deg,#07111f_0%,#0a1321_48%,#070d16_100%)] text-[#f7f4ea]">
+      <div className="mx-auto grid min-h-screen max-w-[1800px] gap-5 px-4 py-4 lg:grid-cols-[280px_1fr]">
+        <aside className="rounded-[30px] border border-white/10 bg-[#07111c]/82 p-5 shadow-[0_24px_90px_rgba(0,0,0,0.4)] backdrop-blur">
+          <p className="text-xs uppercase tracking-[0.42em] text-[#d7f266]">ArmorScan AI</p>
+          <h1 className="mt-4 text-3xl font-semibold tracking-tight text-white">Backend-mapped cockpit</h1>
+          <p className="mt-3 text-sm leading-6 text-white/62">
+            Auth, targets, scans, findings, policy events, risk reports, and exports are wired to the FastAPI surface.
+          </p>
+
+          <div className="mt-6 rounded-[24px] border border-white/10 bg-white/6 p-4">
+            <p className="text-xs uppercase tracking-[0.26em] text-white/42">API base</p>
+            <p className="mt-2 break-all font-mono text-xs text-[#9ef3cf]">{API_BASE}</p>
           </div>
 
-          <nav className="space-y-2">
-            {sideNav.map((item, index) => (
-              <div
+          <nav className="mt-6 grid gap-2 text-sm">
+            {["Auth", "Targets", "Scans", "Findings", "Reports", "Audit", "Policy"].map((item) => (
+              <a
                 key={item}
-                className={`rounded-2xl px-4 py-3 text-sm transition ${
-                  index === 0
-                    ? "bg-[#d7f266] text-[#102018]"
-                    : "text-white/72 hover:bg-white/6 hover:text-white"
-                }`}
+                href={`#${item.toLowerCase()}`}
+                className="rounded-2xl border border-white/8 bg-white/5 px-4 py-3 text-white/72 transition hover:bg-[#d7f266] hover:text-[#102018]"
               >
                 {item}
-              </div>
+              </a>
             ))}
           </nav>
 
-          <div className="mt-auto rounded-[24px] border border-[#d7f266]/25 bg-[#d7f266]/10 p-4">
-            <p className="text-xs uppercase tracking-[0.3em] text-[#d7f266]">
-              Safety status
-            </p>
-            <p className="mt-3 text-sm leading-6 text-white/80">
-              All outbound actions are locked behind signed intent tokens and
-              fail-closed policy checks.
-            </p>
-          </div>
+          <button
+            className="mt-6 w-full rounded-2xl border border-white/10 bg-white/6 px-4 py-3 text-sm text-white/70 transition hover:bg-white/10"
+            onClick={() => {
+              window.localStorage.removeItem("armorscan_token");
+              setToken("");
+              setUser(null);
+              setTargets([]);
+              setScans([]);
+              setFindings([]);
+              setAuditEvents([]);
+            }}
+          >
+            Sign out / clear token
+          </button>
         </aside>
 
-        <section className="flex-1">
-          <div className="rounded-[32px] border border-white/10 bg-[#08101b]/80 p-5 shadow-[0_24px_80px_rgba(0,0,0,0.35)] backdrop-blur sm:p-7">
-            <div className="flex flex-col gap-5 border-b border-white/10 pb-6 lg:flex-row lg:items-end lg:justify-between">
-              <div className="max-w-3xl">
-                <p className="text-xs uppercase tracking-[0.4em] text-[#8db39d]">
-                  Phase 2 dashboard
-                </p>
-                <h2 className="mt-3 max-w-2xl text-4xl font-semibold tracking-tight text-white sm:text-5xl">
-                  Launch and govern AI-native web security scans from one place.
+        <section className="space-y-5">
+          <header className="rounded-[34px] border border-white/10 bg-[#08101b]/82 p-5 shadow-[0_24px_80px_rgba(0,0,0,0.35)] backdrop-blur sm:p-7">
+            <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
+              <div>
+                <p className="text-xs uppercase tracking-[0.4em] text-[#8db39d]">Frontend alignment pass</p>
+                <h2 className="mt-3 max-w-4xl text-4xl font-semibold tracking-tight text-white sm:text-6xl">
+                  A real control plane for the backend we built.
                 </h2>
-                <p className="mt-4 max-w-2xl text-sm leading-7 text-white/68 sm:text-base">
-                  Intake targets, monitor autonomous execution, review validated
-                  findings, and export developer-ready reports without losing
-                  policy visibility.
+                <p className="mt-4 max-w-3xl text-sm leading-7 text-white/68">
+                  No static dummy queue here: every card below is driven by FastAPI endpoints, with graceful empty states when the backend has no data yet.
                 </p>
               </div>
-
-              <div className="grid gap-3 sm:grid-cols-2">
-                <button className="rounded-full bg-[#d7f266] px-5 py-3 text-sm font-semibold text-[#122111] transition hover:bg-[#e5fb84]">
-                  Start new scan
-                </button>
-                <button className="rounded-full border border-white/12 bg-white/6 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/10">
-                  Export latest report
-                </button>
-              </div>
+              <button
+                disabled={!token || isPending}
+                onClick={() =>
+                  startTransition(() => {
+                    refreshData().catch((err: Error) => setError(err.message));
+                  })
+                }
+                className="rounded-full bg-[#d7f266] px-6 py-3 text-sm font-semibold text-[#122111] transition hover:bg-[#e9fb8e] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isPending ? "Syncing..." : "Refresh backend"}
+              </button>
             </div>
 
-            <div className="mt-6 grid gap-4 xl:grid-cols-[1.25fr_0.9fr]">
-              <div className="rounded-[28px] border border-white/10 bg-[linear-gradient(145deg,_rgba(215,242,102,0.14),_rgba(255,255,255,0.03))] p-5">
-                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                  <div>
-                    <p className="text-xs uppercase tracking-[0.3em] text-[#d7f266]">
-                      New mission
-                    </p>
-                    <h3 className="mt-3 text-2xl font-semibold text-white">
-                      Configure a scan target
-                    </h3>
-                  </div>
-                  <div className="rounded-full border border-white/10 px-4 py-2 text-xs uppercase tracking-[0.25em] text-white/60">
-                    MVP control plane
-                  </div>
-                </div>
-
-                <div className="mt-5 grid gap-4 md:grid-cols-2">
-                  <label className="block rounded-[24px] border border-white/10 bg-[#07111c] p-4">
-                    <span className="text-xs uppercase tracking-[0.25em] text-white/45">
-                      Target URL or repo
-                    </span>
-                    <div className="mt-3 rounded-2xl border border-white/8 bg-white/4 px-4 py-3 text-sm text-white/72">
-                      https://prod.customer-portal.app
-                    </div>
-                  </label>
-
-                  <label className="block rounded-[24px] border border-white/10 bg-[#07111c] p-4">
-                    <span className="text-xs uppercase tracking-[0.25em] text-white/45">
-                      Scan mode
-                    </span>
-                    <div className="mt-3 flex flex-wrap gap-2 text-sm">
-                      <span className="rounded-full bg-[#d7f266] px-3 py-2 font-medium text-[#132311]">
-                        Dynamic web audit
-                      </span>
-                      <span className="rounded-full border border-white/10 px-3 py-2 text-white/70">
-                        Repository review
-                      </span>
-                      <span className="rounded-full border border-white/10 px-3 py-2 text-white/70">
-                        API fuzzing
-                      </span>
-                    </div>
-                  </label>
-
-                  <label className="block rounded-[24px] border border-white/10 bg-[#07111c] p-4">
-                    <span className="text-xs uppercase tracking-[0.25em] text-white/45">
-                      Scope guardrails
-                    </span>
-                    <div className="mt-3 space-y-2 text-sm text-white/72">
-                      <p>Subdomains: `*.customer-portal.app`</p>
-                      <p>Rate limit: `90 req/min`</p>
-                      <p>Restricted actions: `file write`, `logout flows`</p>
-                    </div>
-                  </label>
-
-                  <label className="block rounded-[24px] border border-white/10 bg-[#07111c] p-4">
-                    <span className="text-xs uppercase tracking-[0.25em] text-white/45">
-                      Auth & proof
-                    </span>
-                    <div className="mt-3 space-y-2 text-sm text-white/72">
-                      <p>DNS ownership token verified</p>
-                      <p>Session handoff attached</p>
-                      <p>ArmorIQ plan signing required</p>
-                    </div>
-                  </label>
-                </div>
+            {(message || error) && (
+              <div className="mt-5 grid gap-3 lg:grid-cols-2">
+                {message && <p className="rounded-2xl border border-[#d7f266]/20 bg-[#d7f266]/10 px-4 py-3 text-sm text-[#efffba]">{message}</p>}
+                {error && <p className="rounded-2xl border border-[#ff7c70]/30 bg-[#5f1919]/40 px-4 py-3 text-sm text-[#ffb3ad]">{error}</p>}
               </div>
+            )}
+          </header>
 
-              <div className="grid gap-4">
-                {pipelineMetrics.map((metric) => (
-                  <div
-                    key={metric.label}
-                    className="rounded-[24px] border border-white/10 bg-white/6 p-5"
-                  >
-                    <p className="text-sm text-white/60">{metric.label}</p>
-                    <div className="mt-3 flex items-end justify-between">
-                      <span className="text-4xl font-semibold text-white">
-                        {metric.value}
-                      </span>
-                      <span className="text-sm text-[#9ec9a8]">
-                        {metric.detail}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="mt-6 grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
-              <section className="rounded-[28px] border border-white/10 bg-white/6 p-5">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-xs uppercase tracking-[0.3em] text-[#8db39d]">
-                      Live queue
-                    </p>
-                    <h3 className="mt-2 text-2xl font-semibold text-white">
-                      Scan operations
-                    </h3>
-                  </div>
-                  <span className="rounded-full border border-white/10 px-3 py-2 text-xs uppercase tracking-[0.2em] text-white/55">
-                    Celery + websockets
-                  </span>
+          <section id="auth" className="grid gap-5 xl:grid-cols-[0.85fr_1.15fr]">
+            <form onSubmit={handleAuth} className="rounded-[30px] border border-white/10 bg-white/6 p-5">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.3em] text-[#8db39d]">Auth</p>
+                  <h3 className="mt-2 text-2xl font-semibold text-white">{user ? user.full_name : "Login or register"}</h3>
                 </div>
-
-                <div className="mt-5 space-y-4">
-                  {scanQueue.map((scan) => (
-                    <article
-                      key={scan.name}
-                      className="rounded-[24px] border border-white/10 bg-[#07111c] p-4"
+                <div className="rounded-full border border-white/10 p-1 text-xs">
+                  {(["login", "register"] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => setAuthMode(mode)}
+                      className={`rounded-full px-3 py-2 capitalize ${authMode === mode ? "bg-[#d7f266] text-[#102018]" : "text-white/62"}`}
                     >
-                      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                        <div>
-                          <p className="text-lg font-medium text-white">
-                            {scan.name}
-                          </p>
-                          <p className="mt-1 text-sm text-white/60">
-                            {scan.mode}
-                          </p>
-                        </div>
-                        <div className="flex flex-wrap items-center gap-3 text-sm">
-                          <span className={getStatusStyle(scan.status)}>
-                            {scan.status}
-                          </span>
-                          <span className="text-white/45">ETA {scan.eta}</span>
-                          <span
-                            className={`rounded-full px-3 py-1 ${getSeverityStyle(scan.risk)}`}
-                          >
-                            {scan.risk} risk
-                          </span>
-                        </div>
-                      </div>
+                      {mode}
+                    </button>
+                  ))}
+                </div>
+              </div>
 
-                      <div className="mt-4">
-                        <div className="mb-2 flex items-center justify-between text-xs uppercase tracking-[0.2em] text-white/45">
-                          <span>Progress</span>
-                          <span>{scan.progress}%</span>
+              <div className="mt-5 grid gap-3">
+                {authMode === "register" && (
+                  <input
+                    className="rounded-2xl border border-white/10 bg-[#07111c] px-4 py-3 text-sm outline-none focus:border-[#d7f266]"
+                    placeholder="Full name"
+                    value={authForm.full_name}
+                    onChange={(event) => setAuthForm({ ...authForm, full_name: event.target.value })}
+                  />
+                )}
+                <input
+                  className="rounded-2xl border border-white/10 bg-[#07111c] px-4 py-3 text-sm outline-none focus:border-[#d7f266]"
+                  placeholder="Email"
+                  type="email"
+                  value={authForm.email}
+                  onChange={(event) => setAuthForm({ ...authForm, email: event.target.value })}
+                />
+                <input
+                  className="rounded-2xl border border-white/10 bg-[#07111c] px-4 py-3 text-sm outline-none focus:border-[#d7f266]"
+                  placeholder="Password"
+                  type="password"
+                  value={authForm.password}
+                  onChange={(event) => setAuthForm({ ...authForm, password: event.target.value })}
+                />
+                <button className="rounded-2xl bg-[#d7f266] px-4 py-3 text-sm font-semibold text-[#102018]">
+                  {authMode === "register" ? "Register and login" : "Login"}
+                </button>
+              </div>
+            </form>
+
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              {metrics.map((metric) => (
+                <div key={metric.label} className="rounded-[28px] border border-white/10 bg-white/6 p-5">
+                  <p className="text-sm text-white/58">{metric.label}</p>
+                  <p className="mt-3 text-4xl font-semibold text-white">{metric.value}</p>
+                  <p className="mt-2 text-sm text-[#9ec9a8]">{metric.detail}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section id="targets" className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
+            <form onSubmit={createTarget} className="rounded-[30px] border border-white/10 bg-[linear-gradient(145deg,rgba(215,242,102,0.13),rgba(255,255,255,0.035))] p-5">
+              <p className="text-xs uppercase tracking-[0.3em] text-[#d7f266]">Targets API</p>
+              <h3 className="mt-2 text-2xl font-semibold text-white">Create target</h3>
+              <div className="mt-5 grid gap-3 md:grid-cols-2">
+                <input className="field" placeholder="Target name" value={targetForm.name} onChange={(e) => setTargetForm({ ...targetForm, name: e.target.value })} />
+                <select className="field" value={targetForm.target_type} onChange={(e) => setTargetForm({ ...targetForm, target_type: e.target.value })}>
+                  <option value="url">URL</option>
+                  <option value="api">API</option>
+                  <option value="github">GitHub/local repo</option>
+                </select>
+                <input className="field md:col-span-2" placeholder="https://example.com or C:\\path\\repo" value={targetForm.target_url} onChange={(e) => setTargetForm({ ...targetForm, target_url: e.target.value })} />
+                <input className="field md:col-span-2" placeholder="Scope hosts, comma-separated" value={targetForm.scope} onChange={(e) => setTargetForm({ ...targetForm, scope: e.target.value })} />
+                <label className="md:col-span-2 flex items-center gap-3 rounded-2xl border border-white/10 bg-[#07111c] px-4 py-3 text-sm text-white/72">
+                  <input type="checkbox" checked={targetForm.authorization_attestation} onChange={(e) => setTargetForm({ ...targetForm, authorization_attestation: e.target.checked })} />
+                  I attest I am authorized to scan this target.
+                </label>
+              </div>
+              <button disabled={!token} className="mt-4 rounded-2xl bg-[#d7f266] px-5 py-3 text-sm font-semibold text-[#102018] disabled:opacity-50">
+                Create target
+              </button>
+            </form>
+
+            <Panel title="Targets" eyebrow="GET /targets">
+              {targets.length === 0 ? (
+                <EmptyState text="No targets from backend yet." />
+              ) : (
+                <div className="grid gap-3">
+                  {targets.map((target) => (
+                    <article key={target.id} className="rounded-[22px] border border-white/10 bg-[#07111c] p-4">
+                      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                        <div>
+                          <p className="text-lg font-medium text-white">{target.name}</p>
+                          <p className="mt-1 break-all text-sm text-white/56">{target.target_url}</p>
+                          <p className="mt-2 font-mono text-xs text-white/36">{shortId(target.id)} · {target.target_type}</p>
                         </div>
-                        <div className="h-2 rounded-full bg-white/8">
-                          <div
-                            className="h-2 rounded-full bg-[linear-gradient(90deg,_#d7f266,_#6dd7ae)]"
-                            style={{ width: `${scan.progress}%` }}
-                          />
+                        <div className="flex flex-wrap gap-2">
+                          <span className={`rounded-full border border-white/10 px-3 py-1 text-xs ${statusStyle(target.authorization_status)}`}>{target.authorization_status}</span>
+                          {target.authorization_status !== "verified" && (
+                            <button onClick={() => authorizeTarget(target.id)} className="rounded-full bg-[#d7f266] px-3 py-1 text-xs font-semibold text-[#102018]">Authorize</button>
+                          )}
+                          <button onClick={() => deleteTarget(target.id)} className="rounded-full border border-white/10 px-3 py-1 text-xs text-white/58 hover:bg-white/10">Delete</button>
                         </div>
                       </div>
                     </article>
                   ))}
                 </div>
-              </section>
+              )}
+            </Panel>
+          </section>
 
-              <section className="rounded-[28px] border border-white/10 bg-white/6 p-5">
-                <p className="text-xs uppercase tracking-[0.3em] text-[#8db39d]">
-                  Audit stream
-                </p>
-                <h3 className="mt-2 text-2xl font-semibold text-white">
-                  Policy activity
-                </h3>
-                <div className="mt-5 space-y-3">
-                  {auditEvents.map((event, index) => (
-                    <div
-                      key={event}
-                      className="rounded-[22px] border border-white/10 bg-[#07111c] p-4"
+          <section id="scans" className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
+            <form onSubmit={createScan} className="rounded-[30px] border border-white/10 bg-white/6 p-5">
+              <p className="text-xs uppercase tracking-[0.3em] text-[#8db39d]">Scans API</p>
+              <h3 className="mt-2 text-2xl font-semibold text-white">Launch scan</h3>
+              <div className="mt-5 grid gap-3 md:grid-cols-2">
+                <select className="field md:col-span-2" value={scanForm.target_id} onChange={(e) => setScanForm({ ...scanForm, target_id: e.target.value })}>
+                  <option value="">Choose existing target</option>
+                  <option value="__new__">Create inline target during scan</option>
+                  {targets.map((target) => <option key={target.id} value={target.id}>{target.name} · {target.authorization_status}</option>)}
+                </select>
+                {scanForm.target_id === "__new__" && (
+                  <>
+                    <input className="field" placeholder="Inline target name" value={scanForm.target_name} onChange={(e) => setScanForm({ ...scanForm, target_name: e.target.value })} />
+                    <input className="field" placeholder="Inline target URL/repo" value={scanForm.target_url} onChange={(e) => setScanForm({ ...scanForm, target_url: e.target.value })} />
+                  </>
+                )}
+                <select className="field" value={scanForm.scan_type} onChange={(e) => setScanForm({ ...scanForm, scan_type: e.target.value })}>
+                  <option value="url">URL scan</option>
+                  <option value="api">API scan</option>
+                  <option value="github">Repo/SAST scan</option>
+                </select>
+                <input className="field" placeholder="Scope override, comma-separated" value={scanForm.scope} onChange={(e) => setScanForm({ ...scanForm, scope: e.target.value })} />
+                <label className="md:col-span-2 flex items-center gap-3 rounded-2xl border border-white/10 bg-[#07111c] px-4 py-3 text-sm text-white/72">
+                  <input type="checkbox" checked={scanForm.authorization_attestation} onChange={(e) => setScanForm({ ...scanForm, authorization_attestation: e.target.checked })} />
+                  Include manual authorization attestation for inline targets.
+                </label>
+              </div>
+              <button disabled={!token} className="mt-4 rounded-2xl bg-[#d7f266] px-5 py-3 text-sm font-semibold text-[#102018] disabled:opacity-50">
+                Queue governed scan
+              </button>
+            </form>
+
+            <Panel title="Scan operations" eyebrow="GET /scans">
+              {scans.length === 0 ? (
+                <EmptyState text="No scans queued yet." />
+              ) : (
+                <div className="grid gap-3">
+                  {scans.map((scan) => (
+                    <button
+                      key={scan.id}
+                      onClick={() => setSelectedScanId(scan.id)}
+                      className={`rounded-[22px] border p-4 text-left transition ${selectedScanId === scan.id ? "border-[#d7f266]/50 bg-[#d7f266]/10" : "border-white/10 bg-[#07111c] hover:bg-white/8"}`}
                     >
-                      <p className="text-xs uppercase tracking-[0.25em] text-white/40">
-                        Event {index + 1}
-                      </p>
-                      <p className="mt-2 text-sm leading-6 text-white/76">
-                        {event}
-                      </p>
-                    </div>
+                      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                        <div>
+                          <p className="font-mono text-xs text-white/36">{shortId(scan.id)} · {scan.scan_type}</p>
+                          <p className="mt-2 text-lg font-medium text-white">{scan.summary || "Scan queued"}</p>
+                          <p className="mt-2 text-sm text-white/50">Policy decisions: {scan.policy_decisions.length} · Trace nodes: {scan.agent_trace.length}</p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <span className={`rounded-full border border-white/10 px-3 py-1 text-xs ${statusStyle(scan.status)}`}>{scan.status}</span>
+                          {scan.status !== "completed" && scan.status !== "cancelled" && (
+                            <span onClick={(event) => { event.stopPropagation(); cancelScan(scan.id); }} className="rounded-full border border-white/10 px-3 py-1 text-xs text-white/58 hover:bg-white/10">Cancel</span>
+                          )}
+                        </div>
+                      </div>
+                    </button>
                   ))}
                 </div>
-              </section>
-            </div>
+              )}
+            </Panel>
+          </section>
 
-            <div className="mt-6 grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
-              <section className="rounded-[28px] border border-white/10 bg-white/6 p-5">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-xs uppercase tracking-[0.3em] text-[#8db39d]">
-                      Findings
-                    </p>
-                    <h3 className="mt-2 text-2xl font-semibold text-white">
-                      Validated vulnerabilities
-                    </h3>
-                  </div>
-                  <button className="rounded-full border border-white/10 px-4 py-2 text-sm text-white/72 transition hover:bg-white/8">
-                    Review all
-                  </button>
-                </div>
-
-                <div className="mt-5 space-y-4">
-                  {findings.map((finding) => (
-                    <article
-                      key={finding.title}
-                      className="rounded-[24px] border border-white/10 bg-[#07111c] p-4"
-                    >
+          <section id="findings" className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
+            <Panel title="Risk-ranked findings" eyebrow="GET /findings">
+              {activeFindings.length === 0 ? (
+                <EmptyState text="No findings persisted for the selected scan yet." />
+              ) : (
+                <div className="grid gap-3">
+                  {activeFindings.map((finding) => (
+                    <article key={finding.id} className="rounded-[24px] border border-white/10 bg-[#07111c] p-4">
                       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                         <div>
-                          <span
-                            className={`inline-flex rounded-full px-3 py-1 text-xs font-medium ${getSeverityStyle(
-                              finding.severity,
-                            )}`}
-                          >
-                            {finding.severity}
-                          </span>
-                          <h4 className="mt-3 text-lg font-medium text-white">
-                            {finding.title}
-                          </h4>
-                          <p className="mt-2 text-sm text-white/56">
-                            {finding.location}
-                          </p>
+                          <div className="flex flex-wrap gap-2">
+                            <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${severityStyle(finding.risk_rating)}`}>{finding.risk_rating} · {finding.risk_score}/100</span>
+                            <span className={`rounded-full border px-3 py-1 text-xs ${severityStyle(finding.severity)}`}>{finding.severity}</span>
+                            <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-white/54">{finding.status}</span>
+                          </div>
+                          <h4 className="mt-3 text-xl font-medium text-white">{finding.title}</h4>
+                          <p className="mt-2 break-all text-sm text-white/56">{finding.location}</p>
                         </div>
-                        <div className="rounded-2xl border border-white/10 px-4 py-3 text-sm text-white/74">
-                          Confidence {finding.confidence}
-                        </div>
+                        <select className="field max-w-[170px]" value={finding.status} onChange={(e) => updateFindingStatus(finding.id, e.target.value)}>
+                          <option value="open">open</option>
+                          <option value="triaged">triaged</option>
+                          <option value="resolved">resolved</option>
+                          <option value="ignored">ignored</option>
+                        </select>
                       </div>
-                      <p className="mt-4 text-sm leading-6 text-white/74">
-                        {finding.summary}
-                      </p>
+                      <p className="mt-4 text-sm leading-6 text-white/72">{finding.summary}</p>
+                      <p className="mt-3 text-sm leading-6 text-[#d7f266]">{finding.remediation || "No remediation text stored yet."}</p>
                     </article>
                   ))}
                 </div>
-              </section>
+              )}
+            </Panel>
 
-              <section className="rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,_rgba(255,255,255,0.07),_rgba(255,255,255,0.04))] p-5">
-                <p className="text-xs uppercase tracking-[0.3em] text-[#8db39d]">
-                  Reports
+            <Panel title="Selected scan report" eyebrow="Phase 8 exports">
+              <div className="rounded-[24px] border border-white/10 bg-[#07111c] p-4">
+                <p className="text-sm text-white/56">Target</p>
+                <p className="mt-2 break-all text-lg font-medium text-white">{selectedTarget?.target_url || "No scan selected"}</p>
+                <p className="mt-3 text-sm text-white/56">Overall risk</p>
+                <p className="mt-2 text-4xl font-semibold text-[#d7f266]">
+                  {selectedReport?.executive_summary?.overall_risk_score ?? "--"}
                 </p>
-                <h3 className="mt-2 text-2xl font-semibold text-white">
-                  Export surfaces
-                </h3>
+                <p className="mt-1 text-sm uppercase tracking-[0.24em] text-white/44">
+                  {selectedReport?.executive_summary?.overall_risk_rating ?? "pending"}
+                </p>
+              </div>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                {(["json", "sarif", "pdf", "markdown"] as const).map((kind) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    onClick={() => downloadReport(kind)}
+                    disabled={!selectedScanId || !token}
+                    className={`rounded-2xl border border-white/10 bg-white/6 px-4 py-3 text-center text-sm font-semibold uppercase tracking-[0.18em] text-white/75 transition hover:bg-white/10 ${!selectedScanId ? "pointer-events-none opacity-40" : ""}`}
+                  >
+                    {kind}
+                  </button>
+                ))}
+              </div>
+            </Panel>
+          </section>
 
-                <div className="mt-5 grid gap-4">
-                  <div className="rounded-[24px] border border-white/10 bg-[#07111c] p-4">
-                    <p className="text-sm font-medium text-white">
-                      Executive summary PDF
-                    </p>
-                    <p className="mt-2 text-sm leading-6 text-white/64">
-                      One-click report for compliance reviews, stakeholder
-                      briefings, and remediation planning.
-                    </p>
-                  </div>
+          <section id="audit" className="grid gap-5 xl:grid-cols-[0.8fr_1.2fr]">
+            <Panel title="ArmorIQ policy" eyebrow="Signed intent plan">
+              <pre className="max-h-[420px] overflow-auto rounded-[22px] border border-white/10 bg-[#050b12] p-4 text-xs leading-6 text-white/68">
+                {JSON.stringify(selectedScan?.intent_plan ?? { message: "Select or run a scan to see signed policy scope." }, null, 2)}
+              </pre>
+            </Panel>
 
-                  <div className="rounded-[24px] border border-white/10 bg-[#07111c] p-4">
-                    <p className="text-sm font-medium text-white">
-                      JSON evidence bundle
-                    </p>
-                    <p className="mt-2 text-sm leading-6 text-white/64">
-                      Structured finding objects, reproduction details, and
-                      immutable audit metadata.
-                    </p>
-                  </div>
-
-                  <div className="rounded-[24px] border border-white/10 bg-[#07111c] p-4">
-                    <p className="text-sm font-medium text-white">
-                      SARIF developer handoff
-                    </p>
-                    <p className="mt-2 text-sm leading-6 text-white/64">
-                      Pipeline-friendly export for GitHub Security and CI policy
-                      gates.
-                    </p>
-                  </div>
+            <Panel title="Audit trail" eyebrow="GET /audit">
+              {auditEvents.length === 0 ? (
+                <EmptyState text="No audit events yet." />
+              ) : (
+                <div className="grid gap-3">
+                  {auditEvents.map((event) => (
+                    <article key={event.id} className="rounded-[22px] border border-white/10 bg-[#07111c] p-4">
+                      <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                        <p className="font-mono text-xs text-[#8db39d]">{event.event_type}</p>
+                        <time className="text-xs text-white/36">{new Date(event.created_at).toLocaleString()}</time>
+                      </div>
+                      <p className="mt-2 text-sm leading-6 text-white/74">{event.message}</p>
+                    </article>
+                  ))}
                 </div>
-
-                <div className="mt-5 rounded-[24px] border border-[#d7f266]/20 bg-[#d7f266]/10 p-4">
-                  <p className="text-xs uppercase tracking-[0.25em] text-[#d7f266]">
-                    MVP note
-                  </p>
-                  <p className="mt-2 text-sm leading-6 text-white/74">
-                    This Phase 2 UI gives the product a real control-plane shell
-                    for the backend, agent, policy, and reporting phases to plug
-                    into next.
-                  </p>
-                </div>
-              </section>
-            </div>
-          </div>
+              )}
+            </Panel>
+          </section>
         </section>
       </div>
     </main>
+  );
+}
+
+function Panel({
+  title,
+  eyebrow,
+  children,
+}: {
+  title: string;
+  eyebrow: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="rounded-[30px] border border-white/10 bg-white/6 p-5">
+      <p className="text-xs uppercase tracking-[0.3em] text-[#8db39d]">{eyebrow}</p>
+      <h3 className="mt-2 text-2xl font-semibold text-white">{title}</h3>
+      <div className="mt-5">{children}</div>
+    </section>
+  );
+}
+
+function EmptyState({ text }: { text: string }) {
+  return (
+    <div className="rounded-[22px] border border-dashed border-white/14 bg-[#07111c] p-6 text-sm text-white/48">
+      {text}
+    </div>
   );
 }

@@ -104,8 +104,13 @@ class Finding(Base):
     title: Mapped[str] = mapped_column(String(255))
     location: Mapped[str] = mapped_column(Text)
     confidence: Mapped[int] = mapped_column(default=75)
+    risk_score: Mapped[int] = mapped_column(default=0, index=True)
+    risk_rating: Mapped[str] = mapped_column(String(16), default="info", index=True)
     status: Mapped[str] = mapped_column(String(32), default="open", index=True)
     summary: Mapped[str] = mapped_column(Text)
+    business_impact: Mapped[str | None] = mapped_column(Text, nullable=True)
+    remediation: Mapped[str | None] = mapped_column(Text, nullable=True)
+    risk_factors: Mapped[dict] = mapped_column(JSON, default=dict)
     reproduction_steps: Mapped[list[str]] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=now_utc, server_default=func.now()

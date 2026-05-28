@@ -10,12 +10,20 @@ from app.api.v1.router import api_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: create all tables
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # Startup: try to create tables, but don't crash if DB is unreachable
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        print("[startup] Database connected and tables synced.")
+    except Exception as e:
+        print(f"[startup] WARNING: Could not connect to database: {e}")
+        print("[startup] Server will start anyway — DB-dependent endpoints may fail.")
     yield
     # Shutdown
-    await engine.dispose()
+    try:
+        await engine.dispose()
+    except Exception:
+        pass
 
 
 app = FastAPI(

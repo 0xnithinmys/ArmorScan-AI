@@ -7,11 +7,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from app.core.celery_app import celery_app
 from app.core.database import AsyncSessionLocal
 from app.models import AuditEvent, Finding, Scan
 from app.services.event_bus import publish_scan_event
+from app.services.risk import build_risk_report, enrich_findings_with_risk
 
 logger = logging.getLogger(__name__)
 
@@ -65,9 +67,32 @@ async def _persist_scan_progress(scan_id: str, state: dict) -> None:
 
 async def _persist_final_results(scan_id: str, state: dict) -> None:
     async with AsyncSessionLocal() as session:
-        scan = await session.get(Scan, scan_id)
+        result = await session.execute(select(Scan).options(selectinload(Scan.target)).where(Scan.id == scan_id))
+        scan = result.scalar_one_or_none()
         if scan is None:
             return
+
+        risk_findings = enrich_findings_with_risk(state["findings"])
+        state = {**state, "findings": risk_findings}
+        state_report = state.get("report_json") or {}
+        state["report_json"] = {
+            **state_report,
+            "risk_report": build_risk_report(
+                scan={
+                    "id": scan.id,
+                    "status": state["status"],
+                    "scan_type": scan.scan_type,
+                    "created_at": scan.created_at,
+                    "completed_at": datetime.now(timezone.utc),
+                },
+                target={
+                    "id": scan.target_id,
+                    "target_url": scan.target.target_url if scan.target else None,
+                    "scope": scan.scope,
+                },
+                findings=risk_findings,
+            ),
+        }
 
         scan.status = state["status"]
         scan.agent_trace = state["agent_trace"]
@@ -95,8 +120,13 @@ async def _persist_final_results(scan_id: str, state: dict) -> None:
                     title=finding_data["title"],
                     location=finding_data["location"],
                     confidence=finding_data["confidence"],
+                    risk_score=finding_data["risk_score"],
+                    risk_rating=finding_data["risk_rating"],
                     status="open",
                     summary=finding_data["summary"],
+                    business_impact=finding_data["business_impact"],
+                    remediation=finding_data["remediation"],
+                    risk_factors=finding_data["risk_factors"],
                     reproduction_steps=finding_data["reproduction_steps"],
                 )
             )

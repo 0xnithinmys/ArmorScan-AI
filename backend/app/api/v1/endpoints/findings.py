@@ -14,6 +14,7 @@ router = APIRouter()
 @router.get("/", response_model=list[FindingRead])
 async def list_findings(
     severity: str | None = Query(default=None),
+    risk_rating: str | None = Query(default=None),
     status: str | None = Query(default=None),
     scan_id: str | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
@@ -23,10 +24,12 @@ async def list_findings(
         select(Finding)
         .join(Finding.scan)
         .where(Scan.requested_by_id == current_user.id)
-        .order_by(Finding.created_at.desc())
+        .order_by(Finding.risk_score.desc(), Finding.created_at.desc())
     )
     if severity:
         stmt = stmt.where(Finding.severity == severity)
+    if risk_rating:
+        stmt = stmt.where(Finding.risk_rating == risk_rating)
     if status:
         stmt = stmt.where(Finding.status == status)
     if scan_id:
@@ -64,4 +67,6 @@ async def update_finding_status(
             details={"finding_id": finding.id, "status": payload.status},
         )
     )
+    await db.commit()
+    await db.refresh(finding)
     return FindingRead.model_validate(finding)

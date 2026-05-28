@@ -31,6 +31,34 @@ button {
   cursor: pointer;
 }
 
+.field {
+  width: 100%;
+  border-radius: 1rem;
+  border: 1px solid rgb(255 255 255 / 0.1);
+  background: #07111c;
+  padding: 0.75rem 1rem;
+  color: rgb(255 255 255 / 0.86);
+  font-size: 0.875rem;
+  outline: none;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease;
+}
+
+.field:focus {
+  border-color: #d7f266;
+  background: #0a1524;
+}
+
+.field::placeholder {
+  color: rgb(255 255 255 / 0.35);
+}
+
+.field option {
+  background: #07111c;
+  color: #f7f4ea;
+}
+
 ::selection {
   background: rgba(215, 242, 102, 0.35);
   color: #f7f4ea;

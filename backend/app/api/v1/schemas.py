@@ -92,8 +92,13 @@ class FindingRead(BaseModel):
     title: str
     location: str
     confidence: int
+    risk_score: int
+    risk_rating: str
     status: str
     summary: str
+    business_impact: str | None
+    remediation: str | None
+    risk_factors: dict
     reproduction_steps: list[str]
     created_at: datetime
 
