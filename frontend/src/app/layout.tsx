@@ -1,34 +1,43 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { IBM_Plex_Mono, Libre_Baskerville } from "next/font/google";
 import "./globals.css";
+import { AuthProvider } from "./lib/auth-context";
+import Navbar from "./components/navbar";
+import { ScanlineOverlay } from "./components/ui";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const mono = IBM_Plex_Mono({
   subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
+  variable: "--font-mono",
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const serif = Libre_Baskerville({
   subsets: ["latin"],
+  weight: ["400", "700"],
+  style: ["normal", "italic"],
+  variable: "--font-serif",
 });
 
 export const metadata: Metadata = {
-  title: "ArmorScan AI",
+  title: "ArmorScan AI — Security Intelligence Platform",
   description:
-    "AI-native web security audit dashboard with governed scans, live findings, and export-ready reporting.",
+    "Autonomous AI-driven vulnerability scanning with ArmorIQ policy governance.",
 };
 
 export default function RootLayout({
   children,
-}: Readonly<{
+}: {
   children: React.ReactNode;
-}>) {
+}) {
   return (
-    <html
-      lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-    >
-      <body className="min-h-full flex flex-col">{children}</body>
+    <html lang="en" className={`${mono.variable} ${serif.variable}`}>
+      <body className="bg-[#04080f] text-white antialiased">
+        <AuthProvider>
+          <ScanlineOverlay />
+          <Navbar />
+          <div className="pt-14">{children}</div>
+        </AuthProvider>
+      </body>
     </html>
   );
 }

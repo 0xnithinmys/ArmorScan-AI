@@ -1,65 +1,90 @@
 @import "tailwindcss";
-
 :root {
-  --background: #07111f;
-  --foreground: #f7f4ea;
+  --accent: #a8ff3e;
+  --accent-dim: rgba(168, 255, 62, 0.15);
+  --bg-base: #04080f;
+  --bg-surface: #080f18;
+  --bg-raised: #0c1521;
+  --border-subtle: rgba(255, 255, 255, 0.07);
+  --text-muted: rgba(255, 255, 255, 0.45);
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(168, 255, 62, 0.25);
+  border-radius: 2px;
 }
 
-* {
-  box-sizing: border-box;
-}
-
-html {
-  scroll-behavior: smooth;
-}
-
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: var(--font-geist-sans), sans-serif;
-}
-
-a,
-button {
-  cursor: pointer;
-}
-
+/* Reusable field class for select/inputs inside forms */
 .field {
-  width: 100%;
-  border-radius: 1rem;
-  border: 1px solid rgb(255 255 255 / 0.1);
-  background: #07111c;
-  padding: 0.75rem 1rem;
-  color: rgb(255 255 255 / 0.86);
-  font-size: 0.875rem;
-  outline: none;
-  transition:
-    border-color 160ms ease,
-    background 160ms ease;
+  @apply w-full rounded-xl border border-white/10 bg-[#05090f] px-4 py-3 font-mono text-sm text-white/90 placeholder-white/25 outline-none transition focus:border-[#a8ff3e]/50 focus:ring-1 focus:ring-[#a8ff3e]/20;
 }
 
-.field:focus {
-  border-color: #d7f266;
-  background: #0a1524;
+select.field {
+  @apply cursor-pointer;
 }
 
-.field::placeholder {
-  color: rgb(255 255 255 / 0.35);
+/* Stagger animation helpers */
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
-.field option {
-  background: #07111c;
-  color: #f7f4ea;
+@keyframes glitch {
+  0%, 100% { clip-path: inset(0 0 100% 0); }
+  20% { clip-path: inset(30% 0 50% 0); transform: translateX(-3px); }
+  40% { clip-path: inset(10% 0 80% 0); transform: translateX(3px); }
+  60% { clip-path: inset(60% 0 20% 0); transform: translateX(-2px); }
+  80% { clip-path: inset(80% 0 5% 0); transform: translateX(2px); }
 }
 
-::selection {
-  background: rgba(215, 242, 102, 0.35);
-  color: #f7f4ea;
+@keyframes scanMove {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100vh); }
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.animate-fade-up {
+  animation: fadeUp 0.55s ease both;
+}
+
+.animate-blink {
+  animation: blink 1.1s step-end infinite;
+}
+
+.delay-100 { animation-delay: 0.1s; }
+.delay-200 { animation-delay: 0.2s; }
+.delay-300 { animation-delay: 0.3s; }
+.delay-400 { animation-delay: 0.4s; }
+.delay-500 { animation-delay: 0.5s; }
+.delay-600 { animation-delay: 0.6s; }
+.delay-700 { animation-delay: 0.7s; }
+.delay-800 { animation-delay: 0.8s; }
+
+/* Noise texture overlay */
+.noise::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.03;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='1'/%3E%3C/svg%3E");
 }
