@@ -11,7 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.celery_app import celery_app
 from app.core.database import AsyncSessionLocal
-from app.models import AuditEvent, Finding, Scan
+from app.models import AgentExecutionLog, AuditEvent, Finding, FindingEvidence, Scan, ScanArtifact
 from app.services.event_bus import publish_scan_event
 from app.services.risk import build_risk_report, enrich_findings_with_risk
 
@@ -64,6 +64,17 @@ async def _persist_scan_progress(scan_id: str, state: dict) -> None:
         scan.policy_decisions = state.get("policy_decisions", scan.policy_decisions)
         if state["agent_trace"]:
             scan.summary = state["agent_trace"][-1]["summary"]
+            trace = state["agent_trace"][-1]
+            session.add(
+                AgentExecutionLog(
+                    scan_id=scan_id,
+                    agent_name=str(trace.get("agent") or "workflow"),
+                    stage=str(state.get("status") or trace.get("stage") or "unknown"),
+                    status=str(state.get("status") or "running"),
+                    message=str(trace.get("summary") or ""),
+                    metadata_json={"trace": trace},
+                )
+            )
         await session.commit()
 
 
@@ -115,23 +126,47 @@ async def _persist_final_results(scan_id: str, state: dict) -> None:
             await session.delete(finding)
 
         for finding_data in state["findings"]:
+            finding = Finding(
+                scan_id=scan_id,
+                severity=finding_data["severity"],
+                title=finding_data["title"],
+                location=finding_data["location"],
+                confidence=finding_data["confidence"],
+                risk_score=finding_data["risk_score"],
+                risk_rating=finding_data["risk_rating"],
+                status="open",
+                summary=finding_data["summary"],
+                business_impact=finding_data["business_impact"],
+                remediation=finding_data["remediation"],
+                risk_factors=finding_data["risk_factors"],
+                reproduction_steps=finding_data["reproduction_steps"],
+            )
+            session.add(finding)
+            await session.flush()
             session.add(
-                Finding(
-                    scan_id=scan_id,
-                    severity=finding_data["severity"],
-                    title=finding_data["title"],
-                    location=finding_data["location"],
-                    confidence=finding_data["confidence"],
-                    risk_score=finding_data["risk_score"],
-                    risk_rating=finding_data["risk_rating"],
-                    status="open",
-                    summary=finding_data["summary"],
-                    business_impact=finding_data["business_impact"],
-                    remediation=finding_data["remediation"],
-                    risk_factors=finding_data["risk_factors"],
-                    reproduction_steps=finding_data["reproduction_steps"],
+                FindingEvidence(
+                    finding_id=finding.id,
+                    evidence_type="agent_summary",
+                    title="Agent finding summary",
+                    content=finding.summary,
+                    metadata_json={
+                        "location": finding.location,
+                        "risk_factors": finding.risk_factors,
+                        "reproduction_steps": finding.reproduction_steps,
+                    },
                 )
             )
+
+        session.add(
+            ScanArtifact(
+                scan_id=scan_id,
+                artifact_type="risk_report",
+                name="Risk report JSON",
+                uri=None,
+                content_type="application/json",
+                metadata_json={"summary": state["report_json"].get("summary", {})},
+            )
+        )
 
         session.add(
             AuditEvent(

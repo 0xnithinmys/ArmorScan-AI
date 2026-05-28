@@ -16,6 +16,7 @@ from app.api.v1.schemas import (
 )
 from app.core.database import get_db
 from app.models import AuditEvent, Target, TargetAuthorizationProof, User
+from app.services.access_control import load_target_for_user, require_org_role, target_access_filter
 from app.services.target_authorization import (
     VERIFIED_PROOF_TYPES,
     create_proof_challenge,
@@ -31,13 +32,8 @@ def _target_name_from_url(value: str) -> str:
     return host_or_path[:255]
 
 
-async def _load_target_with_proofs(db: AsyncSession, *, target_id: str, owner_id: str) -> Target | None:
-    result = await db.execute(
-        select(Target)
-        .options(selectinload(Target.authorization_proofs))
-        .where(Target.id == target_id, Target.owner_id == owner_id)
-    )
-    return result.scalar_one_or_none()
+async def _load_target_with_proofs(db: AsyncSession, *, target_id: str, user: User, min_role: str = "viewer") -> Target:
+    return await load_target_for_user(db, target_id=target_id, user=user, min_role=min_role)
 
 
 @router.get("/", response_model=list[TargetRead])
@@ -48,7 +44,7 @@ async def list_targets(
     result = await db.execute(
         select(Target)
         .options(selectinload(Target.authorization_proofs))
-        .where(Target.owner_id == current_user.id)
+        .where(target_access_filter(current_user))
         .order_by(Target.created_at.desc())
     )
     return [TargetRead.model_validate(target) for target in result.scalars().all()]
@@ -60,8 +56,10 @@ async def create_target(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    await require_org_role(db, organization_id=payload.organization_id, user=current_user, role="analyst")
     target = Target(
         owner_id=current_user.id,
+        organization_id=payload.organization_id,
         name=(payload.name or "").strip() or _target_name_from_url(payload.target_url),
         target_type=payload.target_type,
         target_url=payload.target_url,
@@ -98,9 +96,7 @@ async def create_target(
         )
     )
     await db.commit()
-    target = await _load_target_with_proofs(db, target_id=target.id, owner_id=current_user.id)
-    if target is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target not found after creation")
+    target = await _load_target_with_proofs(db, target_id=target.id, user=current_user)
     return TargetRead.model_validate(target)
 
 
@@ -110,9 +106,7 @@ async def delete_target(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    target = await _load_target_with_proofs(db, target_id=target_id, owner_id=current_user.id)
-    if target is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target not found")
+    target = await _load_target_with_proofs(db, target_id=target_id, user=current_user, min_role="admin")
 
     db.add(
         AuditEvent(
@@ -133,9 +127,7 @@ async def list_target_proofs(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    target = await _load_target_with_proofs(db, target_id=target_id, owner_id=current_user.id)
-    if target is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target not found")
+    target = await _load_target_with_proofs(db, target_id=target_id, user=current_user)
     proofs = sorted(target.authorization_proofs, key=lambda item: item.created_at, reverse=True)
     return [AuthorizationProofRead.model_validate(proof) for proof in proofs]
 
@@ -151,9 +143,7 @@ async def issue_target_proof_challenge(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    target = await _load_target_with_proofs(db, target_id=target_id, owner_id=current_user.id)
-    if target is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target not found")
+    target = await _load_target_with_proofs(db, target_id=target_id, user=current_user, min_role="analyst")
 
     try:
         proof = create_proof_challenge(target=target, user=current_user, proof_type=payload.proof_type)
@@ -188,9 +178,7 @@ async def authorize_target(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    target = await _load_target_with_proofs(db, target_id=target_id, owner_id=current_user.id)
-    if target is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target not found")
+    target = await _load_target_with_proofs(db, target_id=target_id, user=current_user, min_role="analyst")
 
     if payload.proof_type == "manual_attestation":
         proof = create_proof_challenge(target=target, user=current_user, proof_type="manual_attestation")
@@ -258,7 +246,5 @@ async def authorize_target(
     await db.commit()
     if not result.ok:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=result.message)
-    target = await _load_target_with_proofs(db, target_id=target.id, owner_id=current_user.id)
-    if target is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target not found after authorization")
+    target = await _load_target_with_proofs(db, target_id=target.id, user=current_user)
     return TargetRead.model_validate(target)

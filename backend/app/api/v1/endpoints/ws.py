@@ -10,6 +10,7 @@ from app.core.database import AsyncSessionLocal
 from app.core.security import decode_access_token
 from app.models import Scan, User
 from app.services.event_bus import scan_channel
+from app.services.access_control import load_scan_for_user
 
 router = APIRouter()
 
@@ -81,5 +82,8 @@ async def _websocket_can_access_scan(scan_id: str, token: str | None) -> bool:
         user = result.scalar_one_or_none()
         if user is None or not user.is_active:
             return False
-        scan = await session.get(Scan, scan_id)
-        return scan is not None and scan.requested_by_id == user.id
+        try:
+            await load_scan_for_user(session, scan_id=scan_id, user=user)
+        except Exception:
+            return False
+        return True

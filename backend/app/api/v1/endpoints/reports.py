@@ -4,23 +4,43 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_current_user
+from app.api.v1.schemas import ReportExportRead
 from app.core.database import get_db
-from app.models import AuditEvent, Scan, User
+from app.models import AuditEvent, ReportExport, Scan, User
+from app.services.access_control import load_scan_for_user
 from app.services.risk import build_risk_report, render_markdown_report, render_pdf_report
 
 router = APIRouter()
 
 
 async def _load_scan_for_user(scan_id: str, db: AsyncSession, user: User) -> Scan:
-    result = await db.execute(
-        select(Scan)
-        .options(selectinload(Scan.target), selectinload(Scan.findings))
-        .where(Scan.id == scan_id, Scan.requested_by_id == user.id)
+    return await load_scan_for_user(db, scan_id=scan_id, user=user)
+
+
+async def _record_export(
+    db: AsyncSession, *, scan: Scan, user: User, export_type: str, media_type: str
+) -> None:
+    db.add(
+        ReportExport(
+            scan_id=scan.id,
+            requested_by_id=user.id,
+            export_type=export_type,
+            status="completed",
+            artifact_uri=None,
+            metadata_json={"media_type": media_type},
+        )
     )
-    scan = result.scalar_one_or_none()
-    if scan is None:
-        raise HTTPException(status_code=404, detail="Scan not found")
-    return scan
+    db.add(
+        AuditEvent(
+            user_id=user.id,
+            target_id=scan.target_id,
+            scan_id=scan.id,
+            event_type="report.exported",
+            message=f"{export_type.upper()} report exported.",
+            details={"export_type": export_type, "media_type": media_type},
+        )
+    )
+    await db.commit()
 
 
 @router.get("/{scan_id}/pdf")
@@ -32,6 +52,7 @@ async def download_pdf(
     scan = await _load_scan_for_user(scan_id, db, current_user)
     report = _risk_report_for_scan(scan)
     pdf_bytes = render_pdf_report(report)
+    await _record_export(db, scan=scan, user=current_user, export_type="pdf", media_type="application/pdf")
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
@@ -47,6 +68,9 @@ async def download_markdown(
 ):
     scan = await _load_scan_for_user(scan_id, db, current_user)
     report = _risk_report_for_scan(scan)
+    await _record_export(
+        db, scan=scan, user=current_user, export_type="markdown", media_type="text/markdown"
+    )
     return Response(
         content=render_markdown_report(report),
         media_type="text/markdown; charset=utf-8",
@@ -61,6 +85,9 @@ async def download_sarif(
     current_user: User = Depends(get_current_user),
 ):
     scan = await _load_scan_for_user(scan_id, db, current_user)
+    await _record_export(
+        db, scan=scan, user=current_user, export_type="sarif", media_type="application/sarif+json"
+    )
     return {
         "version": "2.1.0",
         "runs": [
@@ -124,6 +151,9 @@ async def download_json(
 ):
     scan = await _load_scan_for_user(scan_id, db, current_user)
     risk_report = _risk_report_for_scan(scan)
+    await _record_export(
+        db, scan=scan, user=current_user, export_type="json", media_type="application/json"
+    )
     audit_result = await db.execute(
         select(AuditEvent).where(AuditEvent.scan_id == scan.id).order_by(AuditEvent.created_at.asc())
     )
@@ -177,6 +207,21 @@ async def download_json(
             for event in audit_result.scalars().all()
         ],
     }
+
+
+@router.get("/{scan_id}/exports", response_model=list[ReportExportRead])
+async def list_report_exports(
+    scan_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    await _load_scan_for_user(scan_id, db, current_user)
+    result = await db.execute(
+        select(ReportExport)
+        .where(ReportExport.scan_id == scan_id)
+        .order_by(ReportExport.created_at.desc())
+    )
+    return [ReportExportRead.model_validate(export) for export in result.scalars().all()]
 
 
 def _finding_dict(finding) -> dict:
