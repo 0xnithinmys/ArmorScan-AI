@@ -14,6 +14,9 @@ from typing import Any, Callable
 
 import httpx
 
+from armorscan.evidence import build_evidence_summary
+from armorscan.findings import clamp_confidence, dedupe_findings, normalize_draft
+from armorscan.planning import build_scan_plan
 from armorscan.runtime import build_report, fallback_analysis, llm_client, passive_recon
 from armorscan.state import FindingDraft, ScanState
 from armorscan.tools.scanning_engines import run_scanning_engines
@@ -32,6 +35,22 @@ def append_trace(state: ScanState, *, node: str, summary: str, status: str, deta
     ]
     next_state["status"] = status
     return next_state
+
+
+async def planner_node(state: ScanState) -> ScanState:
+    next_state = deepcopy(state)
+    next_state["scan_plan"] = build_scan_plan(next_state)
+    next_state["status"] = "planning"
+    return append_trace(
+        next_state,
+        node="planner",
+        status="planning",
+        summary="Governed scan plan prepared",
+        details={
+            "phases": [phase["name"] for phase in next_state["scan_plan"]["phases"]],
+            "allowed_actions": next_state["scan_plan"]["allowed_actions"],
+        },
+    )
 
 
 async def recon_node(state: ScanState) -> ScanState:
@@ -131,6 +150,7 @@ async def analysis_node(state: ScanState) -> ScanState:
     input_text = (
         f"Target: {state['target_url']}\n"
         f"Scan type: {state['scan_type']}\n"
+        f"Scan plan: {state.get('scan_plan')}\n"
         f"Routes: {state['discovered_routes']}\n"
         f"Inputs: {state['discovered_inputs']}\n"
         f"Forms: {state['discovered_forms']}\n"
@@ -151,7 +171,11 @@ async def analysis_node(state: ScanState) -> ScanState:
             json_schema=schema,
         )
         if groq_response and groq_response.get("findings_drafts"):
-            drafts = groq_response["findings_drafts"]
+            drafts = [
+                draft
+                for draft in groq_response["findings_drafts"]
+                if isinstance(draft, dict) and normalize_draft(draft, fallback_url=state["target_url"])
+            ]
     except Exception as exc:
         state = append_trace(
             state,
@@ -201,25 +225,29 @@ async def exploit_node(state: ScanState) -> ScanState:
     policy_decisions = list(state["policy_decisions"])
 
     for draft in state["findings_drafts"]:
-        confidence = draft["confidence"]
+        normalized_draft = normalize_draft(draft, fallback_url=state["target_url"])
+        if normalized_draft is None:
+            continue
+        confidence = normalized_draft["confidence"]
         evidence = draft.get("evidence")
         if draft.get("parameter") and draft.get("payload") and state["scan_type"] == "url":
             from armorscan.policy import evaluate_agent_action
 
+            probe_url = str(normalized_draft["location"])
             decision = evaluate_agent_action(
                 intent_plan=state["intent_plan"],
                 token=state["armoriq_token"],
                 action="http.get",
-                url=draft["url"],
+                url=probe_url,
                 payload=draft.get("payload"),
             )
             policy_decisions.append(decision.as_dict())
             if not decision.allowed:
-                observations.append({"url": draft["url"], "blocked_by_policy": decision.reason})
+                observations.append({"url": probe_url, "blocked_by_policy": decision.reason})
                 continue
             try:
                 async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-                    response = await client.get(draft["url"])
+                    response = await client.get(probe_url)
                 body_excerpt = response.text[:2000]
                 observations.append(
                     {
@@ -229,32 +257,34 @@ async def exploit_node(state: ScanState) -> ScanState:
                     }
                 )
                 if draft["payload"] in body_excerpt:
-                    confidence = min(0.98, confidence + 0.22)
+                    confidence = min(98, confidence + 22)
                     evidence = f"Payload reflected in response excerpt: {draft['payload']}"
             except Exception as exc:
-                observations.append({"url": draft["url"], "error": str(exc)})
+                observations.append({"url": probe_url, "error": str(exc)})
 
-        if confidence >= 0.55:
+        if confidence >= 55:
             confirmed_findings.append(
                 {
-                    "id": draft["id"],
-                    "title": draft["title"],
-                    "severity": draft["severity"],
-                    "cwe_id": draft.get("cwe_id"),
-                    "location": draft["url"],
-                    "parameter": draft.get("parameter"),
-                    "payload": draft.get("payload"),
+                    "id": normalized_draft["id"],
+                    "title": normalized_draft["title"],
+                    "severity": normalized_draft["severity"],
+                    "cwe_id": normalized_draft.get("cwe_id"),
+                    "location": normalized_draft["location"],
+                    "parameter": normalized_draft.get("parameter"),
+                    "payload": normalized_draft.get("payload"),
                     "evidence": evidence,
-                    "confidence": int(confidence * 100),
-                    "summary": draft.get("rationale") or draft["title"],
-                    "reproduction_steps": draft.get("reproduction_steps", []),
+                    "confidence": clamp_confidence(confidence),
+                    "summary": normalized_draft["summary"],
+                    "reproduction_steps": normalized_draft.get("reproduction_steps", []),
+                    "source": normalized_draft["source"],
                 }
             )
 
     next_state = deepcopy(state)
     next_state["http_observations"] = observations
     next_state["policy_decisions"] = policy_decisions
-    next_state["findings"] = confirmed_findings
+    next_state["findings"] = dedupe_findings(confirmed_findings)
+    next_state["evidence_summary"] = build_evidence_summary(next_state)
     next_state["status"] = "reflecting"
     return append_trace(
         next_state,
@@ -262,7 +292,7 @@ async def exploit_node(state: ScanState) -> ScanState:
         status="reflecting",
         summary="Safe validation completed",
         details={
-            "confirmed_findings": len(confirmed_findings),
+            "confirmed_findings": len(next_state["findings"]),
             "engine_findings": len(state.get("engine_findings", [])),
         },
     )
@@ -270,6 +300,7 @@ async def exploit_node(state: ScanState) -> ScanState:
 
 async def reporter_node(state: ScanState) -> ScanState:
     next_state = deepcopy(state)
+    next_state["evidence_summary"] = build_evidence_summary(next_state)
     next_state["status"] = "completed"
     next_state = append_trace(
         next_state,
@@ -283,6 +314,7 @@ async def reporter_node(state: ScanState) -> ScanState:
 
 
 NODE_PIPELINE: list[tuple[str, Callable[[ScanState], Any]]] = [
+    ("planner", planner_node),
     ("recon", recon_node),
     ("engines", engines_node),
     ("analysis", analysis_node),
@@ -295,8 +327,22 @@ async def run_scan_workflow(initial_state: ScanState) -> list[ScanState]:
     states: list[ScanState] = []
     current = deepcopy(initial_state)
     current["state_graph"] = {"engine": "langgraph" if armorscan_graph is not None else "sequential"}
-    for _, node in NODE_PIPELINE:
-        current = await node(current)
+    for node_name, node in NODE_PIPELINE:
+        try:
+            current = await node(current)
+        except Exception as exc:
+            failed = deepcopy(current)
+            failed["status"] = "failed"
+            failed["error"] = str(exc)
+            failed = append_trace(
+                failed,
+                node=node_name,
+                status="failed",
+                summary=f"{node_name} failed",
+                details={"error": str(exc)},
+            )
+            states.append(failed)
+            break
         states.append(current)
     return states
 
@@ -306,12 +352,14 @@ def build_graph():
         return None
 
     graph = StateGraph(ScanState)
+    graph.add_node("planner", planner_node)
     graph.add_node("recon", recon_node)
     graph.add_node("engines", engines_node)
     graph.add_node("analysis", analysis_node)
     graph.add_node("exploit", exploit_node)
     graph.add_node("reporter", reporter_node)
-    graph.set_entry_point("recon")
+    graph.set_entry_point("planner")
+    graph.add_edge("planner", "recon")
     graph.add_edge("recon", "engines")
     graph.add_edge("engines", "analysis")
     graph.add_edge("analysis", "exploit")

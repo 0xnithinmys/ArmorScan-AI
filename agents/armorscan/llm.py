@@ -46,10 +46,38 @@ class GroqResponsesClient:
             timeout=settings.request_timeout_seconds,
             headers=headers,
         ) as client:
-            response = await client.post("/responses", json=payload)
+            try:
+                response = await client.post("/responses", json=payload)
+                response.raise_for_status()
+                body = response.json()
+                text = body.get("output_text")
+                if text:
+                    return json.loads(text)
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code not in {400, 404, 422}:
+                    raise
+
+            response = await client.post(
+                "/chat/completions",
+                json={
+                    "model": settings.groq_model,
+                    "messages": [
+                        {"role": "system", "content": instructions},
+                        {
+                            "role": "user",
+                            "content": (
+                                f"{input_text}\n\nReturn only JSON that matches this schema:\n"
+                                f"{json.dumps(json_schema['schema'], separators=(',', ':'))}"
+                            ),
+                        },
+                    ],
+                    "response_format": {"type": "json_object"},
+                    "temperature": 0.1,
+                },
+            )
             response.raise_for_status()
             body = response.json()
-            text = body.get("output_text")
+            text = (body.get("choices") or [{}])[0].get("message", {}).get("content")
             if not text:
                 return None
             return json.loads(text)

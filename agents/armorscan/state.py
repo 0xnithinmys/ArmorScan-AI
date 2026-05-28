@@ -27,6 +27,7 @@ class ScanState(TypedDict):
     status: Literal["idle", "planning", "executing", "observing", "reflecting", "completed", "failed"]
 
     # Recon outputs
+    scan_plan: Optional[dict]
     discovered_routes: List[str]
     discovered_forms: List[dict]
     discovered_inputs: List[dict]
@@ -39,6 +40,7 @@ class ScanState(TypedDict):
     engine_observations: List[dict]
     engine_findings: List[dict]
     engine_errors: List[str]
+    evidence_summary: Optional[dict]
 
     # Planning outputs
     intent_plan: Optional[dict]

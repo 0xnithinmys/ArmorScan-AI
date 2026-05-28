@@ -56,6 +56,16 @@ def evaluate_agent_action(
         return AgentPolicyDecision(False, "Missing ArmorIQ intent token", action, {})
     if not intent_plan:
         return AgentPolicyDecision(False, "Missing signed intent plan", action, {})
+    expires_at = intent_plan.get("expires_at")
+    if expires_at:
+        try:
+            expiry = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
+            if expiry.tzinfo is None:
+                expiry = expiry.replace(tzinfo=timezone.utc)
+            if expiry < datetime.now(timezone.utc):
+                return AgentPolicyDecision(False, "Signed intent plan is expired", action, {})
+        except ValueError:
+            return AgentPolicyDecision(False, "Signed intent plan has invalid expiry", action, {})
     if action not in intent_plan.get("allowed_actions", []):
         return AgentPolicyDecision(False, "Action is outside signed plan", action, {})
     if url and not _url_allowed(
