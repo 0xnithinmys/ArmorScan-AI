@@ -17,6 +17,7 @@ from app.services.policy import (
     require_allowed,
     sign_intent_plan,
 )
+from app.services.target_authorization import create_proof_challenge
 from app.workers.scan_worker import run_scan
 
 router = APIRouter()
@@ -62,7 +63,7 @@ async def initiate_scan(
             target_type=payload.scan_type,
             target_url=payload.target_url,
             scope=payload.scope,
-            authorization_status="verified" if payload.authorization_attestation else "pending",
+            authorization_status="attested" if payload.authorization_attestation else "pending",
             authorization_proof_type="manual_attestation" if payload.authorization_attestation else None,
             authorization_proof="User attested authorization during scan creation"
             if payload.authorization_attestation
@@ -70,6 +71,16 @@ async def initiate_scan(
         )
         db.add(target)
         await db.flush()
+        if payload.authorization_attestation:
+            attestation = create_proof_challenge(
+                target=target,
+                user=current_user,
+                proof_type="manual_attestation",
+            )
+            attestation.status = "attested"
+            attestation.submitted_value = "I_AM_AUTHORIZED"
+            attestation.verified_at = datetime.now(timezone.utc)
+            db.add(attestation)
     else:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

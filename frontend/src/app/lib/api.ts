@@ -20,6 +20,26 @@ export type Target = {
   scope: string[];
   authorization_status: string;
   authorization_proof_type: string | null;
+  authorization_verified_at?: string | null;
+  created_at: string;
+};
+
+export type AuthorizationProof = {
+  id: string;
+  target_id: string;
+  created_by_id: string | null;
+  proof_type: string;
+  status: string;
+  challenge_token: string;
+  verification_target: string;
+  expected_value: string;
+  submitted_value: string | null;
+  instructions: string | null;
+  metadata_json: Record<string, unknown>;
+  failure_reason: string | null;
+  last_checked_at: string | null;
+  verified_at: string | null;
+  expires_at: string | null;
   created_at: string;
 };
 
@@ -117,6 +137,8 @@ export function statusStyle(value: string) {
     case "completed":
     case "verified":
       return "text-[#a8ff3e]";
+    case "attested":
+      return "text-[#ffd38f]";
     case "queued":
     case "planning":
     case "executing":

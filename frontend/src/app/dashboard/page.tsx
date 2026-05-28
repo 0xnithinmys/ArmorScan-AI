@@ -4,20 +4,23 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 import { useAuth } from "../lib/auth-context";
 import {
   API_BASE, authHeaders, readError,
-  Target, shortId, statusStyle,
+  AuthorizationProof, Target, shortId,
 } from "../lib/api";
 import {
   Panel, EmptyState, StatusBadge, GreenButton, GhostButton,
 } from "../components/ui";
 
 const empty = { name: "", target_type: "url", target_url: "", scope: "", authorization_attestation: true };
-
+type ProofType = "manual_attestation" | "dns_txt" | "http_file" | "meta_tag" | "github_file";
+ 
 export default function TargetsPage() {
   const { token } = useAuth();
   const [targets, setTargets] = useState<Target[]>([]);
   const [form, setForm] = useState(empty);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [proofTypes, setProofTypes] = useState<Record<string, ProofType>>({});
+  const [proofNotes, setProofNotes] = useState<Record<string, string>>({});
 
   async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
     const r = await fetch(`${API_BASE}${path}`, {
@@ -53,14 +56,43 @@ export default function TargetsPage() {
     } catch (err) { setError(err instanceof Error ? err.message : "Failed"); }
   }
 
-  async function authorizeTarget(id: string) {
+  async function issueChallenge(id: string) {
     setError("");
     try {
-      await apiFetch<Target>(`/targets/${id}/authorize`, {
+      const proofType = proofTypes[id] ?? "dns_txt";
+      const proof = await apiFetch<AuthorizationProof>(`/targets/${id}/proofs/challenge`, {
         method: "POST",
-        body: JSON.stringify({ proof_type: "manual_attestation", proof: "I_AM_AUTHORIZED" }),
+        body: JSON.stringify({ proof_type: proofType }),
       });
-      await load(); setMessage("Target authorized.");
+      const note = proof.instructions
+        ? `${proof.instructions} Challenge token: ${proof.challenge_token}`
+        : `Challenge issued for ${proof.proof_type}.`;
+      setProofNotes(current => ({ ...current, [id]: note }));
+      setMessage(`Challenge issued for ${proof.proof_type}.`);
+    } catch (err) { setError(err instanceof Error ? err.message : "Failed"); }
+  }
+
+  async function verifyTarget(id: string) {
+    setError("");
+    try {
+      const proofType = proofTypes[id] ?? "dns_txt";
+      let proof: string | undefined;
+      if (proofType === "manual_attestation") {
+        proof = "I_AM_AUTHORIZED";
+      } else if (proofType === "github_file") {
+        proof = window.prompt("Paste the raw GitHub verification file URL:", "") || undefined;
+        if (!proof) return;
+      }
+      const target = await apiFetch<Target>(`/targets/${id}/authorize`, {
+        method: "POST",
+        body: JSON.stringify({ proof_type: proofType, ...(proof ? { proof } : {}) }),
+      });
+      await load();
+      setMessage(
+        target.authorization_status === "verified"
+          ? "Target verification succeeded."
+          : "Manual attestation recorded. Real verification is still required before scans run."
+      );
     } catch (err) { setError(err instanceof Error ? err.message : "Failed"); }
   }
 
@@ -109,7 +141,7 @@ export default function TargetsPage() {
                 <input type="checkbox" checked={form.authorization_attestation}
                   onChange={e => setForm({ ...form, authorization_attestation: e.target.checked })}
                   className="accent-[#a8ff3e]" />
-                <span className="font-mono text-xs text-white/55">I attest I am authorized to scan this target.</span>
+                <span className="font-mono text-xs text-white/55">Record manual attestation only. Full verification is still required before scans can run.</span>
               </label>
               <GreenButton type="submit" disabled={!token} className="w-full justify-center">
                 Create target
@@ -144,13 +176,34 @@ export default function TargetsPage() {
                       <div className="flex items-center gap-2 flex-shrink-0">
                         <StatusBadge value={target.authorization_status} />
                         {target.authorization_status !== "verified" && (
-                          <GreenButton onClick={() => authorizeTarget(target.id)} className="py-1.5 px-3 text-xs">
-                            Authorize
-                          </GreenButton>
+                          <>
+                            <select
+                              className="field min-w-[140px] py-1.5 text-xs"
+                              value={proofTypes[target.id] ?? (target.target_type === "github" ? "github_file" : "dns_txt")}
+                              onChange={e => setProofTypes(current => ({ ...current, [target.id]: e.target.value as ProofType }))}
+                            >
+                              <option value="dns_txt">DNS TXT</option>
+                              <option value="http_file">HTTP file</option>
+                              <option value="meta_tag">Meta tag</option>
+                              {target.target_type === "github" && <option value="github_file">GitHub file</option>}
+                              <option value="manual_attestation">Manual attest</option>
+                            </select>
+                            {((proofTypes[target.id] ?? (target.target_type === "github" ? "github_file" : "dns_txt")) !== "manual_attestation") && (
+                              <GhostButton onClick={() => issueChallenge(target.id)}>Issue challenge</GhostButton>
+                            )}
+                            <GreenButton onClick={() => verifyTarget(target.id)} className="py-1.5 px-3 text-xs">
+                              Verify
+                            </GreenButton>
+                          </>
                         )}
                         <GhostButton onClick={() => deleteTarget(target.id)}>Delete</GhostButton>
                       </div>
                     </div>
+                    {proofNotes[target.id] && (
+                      <p className="mt-3 rounded-lg border border-white/7 bg-[#08101a] px-3 py-2 font-mono text-[10px] leading-5 text-white/55">
+                        {proofNotes[target.id]}
+                      </p>
+                    )}
                   </article>
                 ))}
               </div>

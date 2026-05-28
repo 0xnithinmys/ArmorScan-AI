@@ -42,6 +42,8 @@ class Settings(BaseSettings):
     ARMORIQ_INTENT_TTL_SECONDS: int = 3600
     POLICY_MAX_REQUESTS_PER_SCAN: int = 120
     POLICY_ALLOWED_SCHEMES: List[str] = ["http", "https"]
+    TARGET_AUTH_PROOF_TTL_HOURS: int = 24
+    TARGET_AUTH_HTTP_TIMEOUT_SECONDS: int = 10
 
     @property
     def effective_groq_api_key(self) -> str:

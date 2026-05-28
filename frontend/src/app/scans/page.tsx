@@ -121,7 +121,7 @@ export default function ScansPage() {
               <input className="field" placeholder="Scope override, comma-separated" value={form.scope} onChange={e => setForm({ ...form, scope: e.target.value })} />
               <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-white/8 bg-[#05090f] px-4 py-3">
                 <input type="checkbox" checked={form.authorization_attestation} onChange={e => setForm({ ...form, authorization_attestation: e.target.checked })} className="accent-[#a8ff3e]" />
-                <span className="font-mono text-xs text-white/55">Include manual authorization attestation.</span>
+                <span className="font-mono text-xs text-white/55">Include manual attestation only. Real target verification is still required before scans will run.</span>
               </label>
               {token ? (
                 <GreenButton type="submit" className="w-full justify-center">Queue governed scan</GreenButton>
@@ -156,7 +156,7 @@ export default function ScansPage() {
                         <div className="flex items-center gap-2">
                           <StatusBadge value={scan.status} />
                           {liveStatuses.has(scan.status) && (
-                            <GhostButton onClick={ev => { ev.stopPropagation(); cancelScan(scan.id); }}>Cancel</GhostButton>
+                            <GhostButton onClick={() => { void cancelScan(scan.id); }}>Cancel</GhostButton>
                           )}
                         </div>
                       </div>

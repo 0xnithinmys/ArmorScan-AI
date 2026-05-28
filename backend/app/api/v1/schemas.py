@@ -45,12 +45,41 @@ class TargetRead(BaseModel):
     scope: list[str]
     authorization_status: str
     authorization_proof_type: str | None
+    authorization_verified_at: datetime | None = None
+    created_at: datetime
+
+
+class AuthorizationChallengeRequest(BaseModel):
+    proof_type: Literal["dns_txt", "http_file", "meta_tag", "github_file"]
+
+
+class AuthorizationProofRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    target_id: str
+    created_by_id: str | None
+    proof_type: str
+    status: str
+    challenge_token: str
+    verification_target: str
+    expected_value: str
+    submitted_value: str | None
+    instructions: str | None
+    metadata_json: dict
+    failure_reason: str | None
+    last_checked_at: datetime | None
+    verified_at: datetime | None
+    expires_at: datetime | None
     created_at: datetime
 
 
 class TargetAuthorizeRequest(BaseModel):
-    proof_type: Literal["manual_attestation", "dns_txt", "meta_tag"] = "manual_attestation"
-    proof: str = Field(min_length=8)
+    proof_type: Literal["manual_attestation", "dns_txt", "http_file", "meta_tag", "github_file"] = (
+        "manual_attestation"
+    )
+    proof: str | None = Field(default=None, min_length=8)
+    challenge_token: str | None = Field(default=None, min_length=12)
 
 
 class ScanCreateRequest(BaseModel):

@@ -53,10 +53,50 @@ class Target(Base):
     )
 
     owner: Mapped["User"] = relationship(back_populates="targets")
+    authorization_proofs: Mapped[list["TargetAuthorizationProof"]] = relationship(
+        back_populates="target", cascade="all, delete-orphan"
+    )
     scans: Mapped[list["Scan"]] = relationship(
         back_populates="target", cascade="all, delete-orphan"
     )
     audit_events: Mapped[list["AuditEvent"]] = relationship(back_populates="target")
+
+    @property
+    def authorization_verified_at(self) -> datetime | None:
+        verified = [
+            proof.verified_at
+            for proof in self.authorization_proofs
+            if proof.verified_at and proof.status == "verified"
+        ]
+        return max(verified) if verified else None
+
+
+class TargetAuthorizationProof(Base):
+    __tablename__ = "target_authorization_proofs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    target_id: Mapped[str] = mapped_column(ForeignKey("targets.id", ondelete="CASCADE"), index=True)
+    created_by_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    proof_type: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    challenge_token: Mapped[str] = mapped_column(String(128), index=True)
+    verification_target: Mapped[str] = mapped_column(Text)
+    expected_value: Mapped[str] = mapped_column(Text)
+    submitted_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, server_default=func.now()
+    )
+
+    target: Mapped["Target"] = relationship(back_populates="authorization_proofs")
+    created_by: Mapped["User | None"] = relationship()
 
 
 class Scan(Base):
