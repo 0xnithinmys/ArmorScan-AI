@@ -18,6 +18,17 @@ from armorscan.evidence import build_evidence_summary
 from armorscan.findings import clamp_confidence, dedupe_findings, normalize_draft
 from armorscan.planning import build_scan_plan
 from armorscan.runtime import build_report, fallback_analysis, llm_client, passive_recon
+from armorscan.specialists import (
+    api_discovery_agent,
+    apply_specialist_result,
+    browser_workflow_agent,
+    correlation_agent,
+    dependency_supply_chain_agent,
+    evidence_normalization_agent,
+    repo_sast_agent,
+    retest_agent,
+    scanner_registry_agent,
+)
 from armorscan.state import FindingDraft, ScanState
 from armorscan.tools.scanning_engines import run_scanning_engines
 
@@ -72,7 +83,9 @@ async def recon_node(state: ScanState) -> ScanState:
                 "Capture forms, inputs, links, buttons, and browser network activity",
                 "Infer technology stack from headers and markup",
                 "Draft candidate findings",
-                "Run safe HTTP confirmation probes",
+            "Run safe HTTP confirmation probes",
+            "Map API endpoints and JavaScript-discovered routes",
+            "Correlate scanner, browser, repo, and API evidence",
             ],
         }
     next_state["status"] = "planning"
@@ -90,6 +103,88 @@ async def recon_node(state: ScanState) -> ScanState:
             "policy_decisions": len(next_state["policy_decisions"]),
             "technology_stack": next_state["technology_stack"],
         },
+    )
+
+
+async def browser_workflow_node(state: ScanState) -> ScanState:
+    result = await browser_workflow_agent(state)
+    next_state = apply_specialist_result(state, result)
+    next_state["status"] = "planning"
+    return append_trace(
+        next_state,
+        node="browser_workflow_agent",
+        status="planning",
+        summary="Browser workflow surface mapped",
+        details={
+            "uploads": len(next_state.get("discovered_uploads", [])),
+            "workflows": len(next_state.get("authenticated_workflows", [])),
+            "js_sources": len(next_state.get("discovered_js_endpoints", [])),
+        },
+    )
+
+
+async def api_discovery_node(state: ScanState) -> ScanState:
+    result = await api_discovery_agent(state)
+    next_state = apply_specialist_result(state, result)
+    next_state["status"] = "planning"
+    return append_trace(
+        next_state,
+        node="api_discovery_agent",
+        status="planning",
+        summary="API and JavaScript endpoint discovery completed",
+        details={
+            "apis": len(next_state.get("discovered_apis", [])),
+            "js_endpoints": len(next_state.get("discovered_js_endpoints", [])),
+            "policy_decisions": len(next_state.get("policy_decisions", [])),
+        },
+    )
+
+
+async def repo_sast_node(state: ScanState) -> ScanState:
+    result = await repo_sast_agent(state)
+    next_state = apply_specialist_result(state, result)
+    next_state["status"] = "planning"
+    return append_trace(
+        next_state,
+        node="repo_sast_agent",
+        status="planning",
+        summary="Repository route and source inventory completed",
+        details={
+            "repo_inventory": len(next_state.get("repo_inventory", [])),
+            "routes": len(next_state.get("discovered_routes", [])),
+            "inputs": len(next_state.get("discovered_inputs", [])),
+            "technology_stack": next_state.get("technology_stack", []),
+        },
+    )
+
+
+async def supply_chain_node(state: ScanState) -> ScanState:
+    result = await dependency_supply_chain_agent(state)
+    next_state = apply_specialist_result(state, result)
+    next_state["status"] = "planning"
+    return append_trace(
+        next_state,
+        node="dependency_supply_chain_agent",
+        status="planning",
+        summary="Dependency and infrastructure inventory completed",
+        details={
+            "dependencies": len(next_state.get("dependency_inventory", [])),
+            "iac": len(next_state.get("iac_inventory", [])),
+            "repo_files": len(next_state.get("repo_inventory", [])),
+        },
+    )
+
+
+async def scanner_registry_node(state: ScanState) -> ScanState:
+    result = scanner_registry_agent(state)
+    next_state = apply_specialist_result(state, result)
+    next_state["status"] = "planning"
+    return append_trace(
+        next_state,
+        node="scanner_registry_agent",
+        status="planning",
+        summary="Scanner capability matrix prepared",
+        details={"scanners": next_state.get("scanner_capabilities", [])},
     )
 
 
@@ -162,6 +257,11 @@ async def analysis_node(state: ScanState) -> ScanState:
         f"Scanner observations: {state.get('engine_observations', [])}\n"
         f"Scanner findings: {state.get('engine_findings', [])}\n"
         f"Scanner errors: {state.get('engine_errors', [])}\n"
+        f"Discovered APIs: {state.get('discovered_apis', [])}\n"
+        f"Authenticated workflows: {state.get('authenticated_workflows', [])}\n"
+        f"Repo inventory: {state.get('repo_inventory', [])[:30]}\n"
+        f"Dependency inventory: {state.get('dependency_inventory', [])[:30]}\n"
+        f"IaC inventory: {state.get('iac_inventory', [])[:30]}\n"
         "Return up to 5 candidate findings."
     )
 
@@ -217,6 +317,19 @@ async def engines_node(state: ScanState) -> ScanState:
             "errors": next_state["engine_errors"],
             "policy_decisions": len(next_state["policy_decisions"]),
         },
+    )
+
+
+async def evidence_normalization_node(state: ScanState) -> ScanState:
+    result = evidence_normalization_agent(state)
+    next_state = apply_specialist_result(state, result)
+    next_state["status"] = "observing"
+    return append_trace(
+        next_state,
+        node="evidence_normalization_agent",
+        status="observing",
+        summary="Evidence normalized across browser, API, repo, and scanner outputs",
+        details={"evidence_count": len(next_state.get("normalized_evidence", []))},
     )
 
 
@@ -299,6 +412,33 @@ async def exploit_node(state: ScanState) -> ScanState:
     )
 
 
+async def correlation_node(state: ScanState) -> ScanState:
+    result = correlation_agent(state)
+    next_state = apply_specialist_result(state, result)
+    next_state["evidence_summary"] = build_evidence_summary(next_state)
+    next_state["status"] = "reflecting"
+    return append_trace(
+        next_state,
+        node="correlation_agent",
+        status="reflecting",
+        summary="Findings correlated with normalized evidence",
+        details=next_state.get("correlation_summary") or {},
+    )
+
+
+async def retest_node(state: ScanState) -> ScanState:
+    result = retest_agent(state)
+    next_state = apply_specialist_result(state, result)
+    next_state["status"] = "reflecting"
+    return append_trace(
+        next_state,
+        node="retest_agent",
+        status="reflecting",
+        summary="Safe retest plan prepared",
+        details={"checks": len((next_state.get("retest_plan") or {}).get("checks", []))},
+    )
+
+
 async def reporter_node(state: ScanState) -> ScanState:
     next_state = deepcopy(state)
     next_state["evidence_summary"] = build_evidence_summary(next_state)
@@ -317,9 +457,17 @@ async def reporter_node(state: ScanState) -> ScanState:
 NODE_PIPELINE: list[tuple[str, Callable[[ScanState], Any]]] = [
     ("planner", planner_node),
     ("recon", recon_node),
+    ("browser_workflow", browser_workflow_node),
+    ("api_discovery", api_discovery_node),
+    ("repo_sast", repo_sast_node),
+    ("supply_chain", supply_chain_node),
+    ("scanner_registry", scanner_registry_node),
     ("engines", engines_node),
+    ("evidence_normalization", evidence_normalization_node),
     ("analysis", analysis_node),
     ("exploit", exploit_node),
+    ("correlation", correlation_node),
+    ("retest", retest_node),
     ("reporter", reporter_node),
 ]
 
@@ -355,16 +503,32 @@ def build_graph():
     graph = StateGraph(ScanState)
     graph.add_node("planner", planner_node)
     graph.add_node("recon", recon_node)
+    graph.add_node("browser_workflow", browser_workflow_node)
+    graph.add_node("api_discovery", api_discovery_node)
+    graph.add_node("repo_sast", repo_sast_node)
+    graph.add_node("supply_chain", supply_chain_node)
+    graph.add_node("scanner_registry", scanner_registry_node)
     graph.add_node("engines", engines_node)
+    graph.add_node("evidence_normalization", evidence_normalization_node)
     graph.add_node("analysis", analysis_node)
     graph.add_node("exploit", exploit_node)
+    graph.add_node("correlation", correlation_node)
+    graph.add_node("retest", retest_node)
     graph.add_node("reporter", reporter_node)
     graph.set_entry_point("planner")
     graph.add_edge("planner", "recon")
-    graph.add_edge("recon", "engines")
-    graph.add_edge("engines", "analysis")
+    graph.add_edge("recon", "browser_workflow")
+    graph.add_edge("browser_workflow", "api_discovery")
+    graph.add_edge("api_discovery", "repo_sast")
+    graph.add_edge("repo_sast", "supply_chain")
+    graph.add_edge("supply_chain", "scanner_registry")
+    graph.add_edge("scanner_registry", "engines")
+    graph.add_edge("engines", "evidence_normalization")
+    graph.add_edge("evidence_normalization", "analysis")
     graph.add_edge("analysis", "exploit")
-    graph.add_edge("exploit", "reporter")
+    graph.add_edge("exploit", "correlation")
+    graph.add_edge("correlation", "retest")
+    graph.add_edge("retest", "reporter")
     graph.add_edge("reporter", END)
     return graph.compile()
 
