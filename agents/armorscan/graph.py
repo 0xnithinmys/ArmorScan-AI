@@ -56,6 +56,7 @@ async def planner_node(state: ScanState) -> ScanState:
 async def recon_node(state: ScanState) -> ScanState:
     recon = await passive_recon(
         state["target_url"],
+        scan_type=state["scan_type"],
         intent_plan=state["intent_plan"],
         token=state["armoriq_token"],
     )

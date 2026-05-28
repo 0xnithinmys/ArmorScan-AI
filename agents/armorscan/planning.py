@@ -28,7 +28,10 @@ def build_scan_plan(state: dict[str, Any]) -> dict[str, Any]:
         {
             "name": "scanner_engines",
             "goal": "Run available DAST/SAST engines and normalize evidence.",
-            "actions": sorted({"scanner.nuclei", "scanner.semgrep", "scanner.bandit"} & allowed_actions),
+            "actions": sorted(
+                {"scanner.nuclei", "scanner.zap", "scanner.semgrep", "scanner.bandit", "scanner.gitleaks", "scanner.trivy"}
+                & allowed_actions
+            ),
             "safety": "No destructive templates, no off-scope hosts, CLI absence becomes a non-fatal observation.",
         },
         {
@@ -53,7 +56,7 @@ def build_scan_plan(state: dict[str, Any]) -> dict[str, Any]:
 
     if scan_type == "github":
         phases[0]["goal"] = "Resolve local repository path and collect non-network static context."
-        phases[1]["goal"] = "Run Semgrep/Bandit or deterministic fallback rules against local source."
+        phases[1]["goal"] = "Run Semgrep/Bandit/Gitleaks/Trivy or deterministic fallback rules against repository source."
     elif scan_type == "api":
         phases[0]["goal"] = "Map public API routes, metadata, and lightweight response behavior."
 

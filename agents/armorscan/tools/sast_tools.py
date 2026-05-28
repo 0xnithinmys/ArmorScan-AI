@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from armorscan.policy import evaluate_agent_action
-from armorscan.tools.engine_common import EngineResult, normalize_severity, resolve_local_repo, run_json_command
+from armorscan.tools.engine_common import EngineResult, ensure_repo_target, normalize_severity, run_json_command
 
 
 STATIC_PATTERNS = [
@@ -117,6 +117,79 @@ def _normalize_bandit(row: dict[str, Any], repo_path: Path) -> dict[str, Any]:
     }
 
 
+def _normalize_gitleaks(row: dict[str, Any], repo_path: Path) -> dict[str, Any]:
+    rel = row.get("File") or row.get("file") or "unknown"
+    line = row.get("StartLine") or row.get("start_line")
+    location = f"{rel}:{line}" if line else str(rel)
+    secret_type = row.get("RuleID") or row.get("Description") or "Potential secret"
+    return {
+        "id": f"gitleaks-{secret_type}-{line or 0}",
+        "title": f"Potential secret exposure: {secret_type}",
+        "severity": "high",
+        "cwe_id": "CWE-798",
+        "location": location,
+        "parameter": None,
+        "payload": None,
+        "evidence": (row.get("Match") or row.get("Secret") or "")[:200],
+        "confidence": 88,
+        "summary": row.get("Description") or "Potential credential or token material was detected in repository contents.",
+        "reproduction_steps": [
+            f"Open {location}.",
+            "Verify whether the value is a live secret, test fixture, or false positive.",
+        ],
+        "source": "gitleaks",
+        "raw": row,
+    }
+
+
+def _normalize_trivy_result(row: dict[str, Any], repo_path: Path) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    target = row.get("Target") or str(repo_path)
+    for vuln in row.get("Vulnerabilities") or []:
+        findings.append(
+            {
+                "id": f"trivy-{vuln.get('VulnerabilityID', 'issue')}",
+                "title": vuln.get("Title") or vuln.get("PkgName") or "Dependency vulnerability",
+                "severity": normalize_severity(vuln.get("Severity")),
+                "cwe_id": None,
+                "location": target,
+                "parameter": vuln.get("PkgName"),
+                "payload": None,
+                "evidence": vuln.get("InstalledVersion"),
+                "confidence": 84,
+                "summary": vuln.get("Description") or "Trivy detected a vulnerable dependency or config issue.",
+                "reproduction_steps": [
+                    f"Run trivy fs --scanners vuln,secret,misconfig --format json {repo_path}.",
+                    f"Review package {vuln.get('PkgName')} in {target}.",
+                ],
+                "source": "trivy",
+                "raw": vuln,
+            }
+        )
+    for misconfig in row.get("Misconfigurations") or []:
+        findings.append(
+            {
+                "id": f"trivy-misconfig-{misconfig.get('ID', 'issue')}",
+                "title": misconfig.get("Title") or misconfig.get("Message") or "Configuration issue",
+                "severity": normalize_severity(misconfig.get("Severity")),
+                "cwe_id": None,
+                "location": target,
+                "parameter": misconfig.get("Type"),
+                "payload": None,
+                "evidence": misconfig.get("Resolution"),
+                "confidence": 80,
+                "summary": misconfig.get("Description") or "Trivy detected a configuration weakness.",
+                "reproduction_steps": [
+                    f"Run trivy fs --scanners vuln,secret,misconfig --format json {repo_path}.",
+                    f"Review the configuration finding in {target}.",
+                ],
+                "source": "trivy",
+                "raw": misconfig,
+            }
+        )
+    return findings
+
+
 async def run_semgrep_scan(
     target: str,
     *,
@@ -133,6 +206,24 @@ async def run_bandit_scan(
     token: str | None,
 ) -> EngineResult:
     return await _run_sast_scan(target, engine="bandit", intent_plan=intent_plan, token=token)
+
+
+async def run_gitleaks_scan(
+    target: str,
+    *,
+    intent_plan: dict[str, Any] | None,
+    token: str | None,
+) -> EngineResult:
+    return await _run_sast_scan(target, engine="gitleaks", intent_plan=intent_plan, token=token)
+
+
+async def run_trivy_scan(
+    target: str,
+    *,
+    intent_plan: dict[str, Any] | None,
+    token: str | None,
+) -> EngineResult:
+    return await _run_sast_scan(target, engine="trivy", intent_plan=intent_plan, token=token)
 
 
 async def _run_sast_scan(
@@ -154,29 +245,34 @@ async def _run_sast_scan(
         result.observations.append({"engine": engine, "blocked_by_policy": decision.reason})
         return result
 
-    repo_path = resolve_local_repo(target)
+    repo_path, repo_errors, repo_meta = await ensure_repo_target(target)
     if repo_path is None:
-        result.errors.append("No local repository path is available for SAST scan")
+        result.errors.extend(repo_errors or ["No local repository path is available for SAST scan"])
         result.observations.append(
             {
                 "engine": engine,
                 "available": False,
-                "message": "Provide a local repository path or checked-out file:// target for SAST scanning.",
+                "message": "Provide a local repository path or an accessible GitHub repository URL for SAST scanning.",
+                "repo_meta": repo_meta,
             }
         )
         return result
 
     binary = shutil.which(engine)
     if not binary:
-        result.findings.extend(_static_fallback(repo_path, engine=engine))
-        result.errors.append(f"{engine} CLI is not installed or not on PATH; used fallback static rules")
+        if engine in {"semgrep", "bandit"}:
+            result.findings.extend(_static_fallback(repo_path, engine=engine))
+            result.errors.append(f"{engine} CLI is not installed or not on PATH; used fallback static rules")
+        else:
+            result.errors.append(f"{engine} CLI is not installed or not on PATH")
         result.observations.append(
             {
                 "engine": engine,
                 "available": False,
-                "fallback": True,
+                "fallback": engine in {"semgrep", "bandit"},
                 "repo_path": str(repo_path),
                 "findings": len(result.findings),
+                "repo_meta": repo_meta,
             }
         )
         return result
@@ -191,7 +287,7 @@ async def _run_sast_scan(
             data = json.loads(stdout or "{}")
             rows = data.get("results", [])
             result.findings.extend(_normalize_semgrep(row, repo_path) for row in rows)
-        else:
+        elif engine == "bandit":
             code, stdout, stderr = await run_json_command(
                 [binary, "-r", str(repo_path), "-f", "json"],
                 timeout_seconds=180,
@@ -199,6 +295,22 @@ async def _run_sast_scan(
             data = json.loads(stdout or "{}")
             rows = data.get("results", [])
             result.findings.extend(_normalize_bandit(row, repo_path) for row in rows)
+        elif engine == "gitleaks":
+            code, stdout, stderr = await run_json_command(
+                [binary, "detect", "--no-git", "--source", str(repo_path), "--report-format", "json", "--report-path", "-"],
+                timeout_seconds=180,
+            )
+            rows = json.loads(stdout or "[]")
+            if isinstance(rows, list):
+                result.findings.extend(_normalize_gitleaks(row, repo_path) for row in rows)
+        else:
+            code, stdout, stderr = await run_json_command(
+                [binary, "fs", "--scanners", "vuln,secret,misconfig", "--format", "json", str(repo_path)],
+                timeout_seconds=240,
+            )
+            data = json.loads(stdout or "{}")
+            for row in data.get("Results") or []:
+                result.findings.extend(_normalize_trivy_result(row, repo_path))
         result.observations.append(
             {
                 "engine": engine,
@@ -206,6 +318,7 @@ async def _run_sast_scan(
                 "return_code": code,
                 "repo_path": str(repo_path),
                 "findings": len(result.findings),
+                "repo_meta": repo_meta,
             }
         )
         if stderr.strip():

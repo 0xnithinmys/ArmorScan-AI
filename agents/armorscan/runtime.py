@@ -10,6 +10,7 @@ from armorscan.llm import GroqResponsesClient
 from armorscan.policy import evaluate_agent_action
 from armorscan.state import FindingDraft, ScanState
 from armorscan.tools.playwright_tools import run_browser_recon
+from armorscan.tools.repo_tools import inspect_repository
 from armorscan.utils import normalize_target_url
 
 COMMON_PATHS = ["/", "/login", "/search", "/admin", "/api", "/health", "/graphql"]
@@ -23,9 +24,23 @@ def _host_label(target_url: str) -> str:
 async def passive_recon(
     target_url: str,
     *,
+    scan_type: str = "url",
     intent_plan: dict[str, Any] | None,
     token: str | None,
 ) -> dict[str, Any]:
+    if scan_type == "github":
+        repo_recon = await inspect_repository(target_url)
+        return {
+            "discovered_routes": repo_recon["routes"],
+            "discovered_forms": [],
+            "discovered_inputs": repo_recon["inputs"][:20],
+            "browser_observations": repo_recon["observations"],
+            "browser_errors": repo_recon["errors"],
+            "policy_decisions": repo_recon.get("policy_decisions", []),
+            "technology_stack": list(dict.fromkeys(repo_recon["frameworks"] + repo_recon["languages"])),
+            "http_observations": [{"repo_path": repo_recon["repo_path"], "frameworks": repo_recon["frameworks"]}],
+        }
+
     target_url = normalize_target_url(target_url)
     observations: list[dict[str, Any]] = []
     policy_decisions: list[dict[str, Any]] = []
@@ -72,6 +87,22 @@ async def passive_recon(
                 "body_excerpt": body[:1200],
             }
         )
+        for support_path in ["robots.txt", "sitemap.xml"]:
+            try:
+                support_url = urljoin(target_url.rstrip("/") + "/", support_path)
+                support_response = await client.get(support_url)
+                if support_response.status_code < 400:
+                    observations.append(
+                        {
+                            "url": str(support_response.url),
+                            "status_code": support_response.status_code,
+                            "body_excerpt": support_response.text[:1200],
+                        }
+                    )
+                    if support_path == "sitemap.xml":
+                        routes.extend(re.findall(r"<loc>(.*?)</loc>", support_response.text, flags=re.IGNORECASE))
+            except Exception as exc:
+                observations.append({"url": support_path, "error": str(exc)})
     except Exception as exc:
         observations.append({"url": target_url, "error": str(exc)})
 
@@ -220,6 +251,68 @@ def fallback_analysis(state: ScanState) -> list[FindingDraft]:
                 "rationale": "Nuclei/SAST scanner evidence was collected and should be correlated with agent observations.",
             }
         )
+
+    if state["scan_type"] in {"url", "api"}:
+        header_blob = headers.lower()
+        if "content-security-policy" not in header_blob:
+            drafts.append(
+                {
+                    "id": "missing-csp",
+                    "title": "Content Security Policy header is missing",
+                    "severity": "medium",
+                    "cwe_id": "CWE-693",
+                    "url": state["target_url"],
+                    "parameter": None,
+                    "payload": None,
+                    "evidence": headers[:500],
+                    "confidence": 0.74,
+                    "reproduction_steps": [
+                        f"Send a GET request to {state['target_url']}",
+                        "Verify whether a Content-Security-Policy response header is returned.",
+                    ],
+                    "rationale": "Missing CSP reduces defense-in-depth against script injection and unsafe third-party content.",
+                }
+            )
+        if "access-control-allow-origin" in header_blob and "*" in header_blob:
+            drafts.append(
+                {
+                    "id": "cors-wildcard",
+                    "title": "Wildcard CORS policy requires review",
+                    "severity": "medium",
+                    "cwe_id": "CWE-942",
+                    "url": state["target_url"],
+                    "parameter": None,
+                    "payload": None,
+                    "evidence": headers[:500],
+                    "confidence": 0.69,
+                    "reproduction_steps": [
+                        f"Send a GET request to {state['target_url']}",
+                        "Inspect Access-Control-Allow-Origin and credential settings.",
+                    ],
+                    "rationale": "Permissive cross-origin sharing can expose sensitive API responses when combined with weak auth controls.",
+                }
+            )
+
+    if state["scan_type"] == "github":
+        repo_text = " ".join(str(obs) for obs in state["http_observations"] + state["browser_observations"]).lower()
+        if "dockerfile" in repo_text or "docker-compose" in repo_text:
+            drafts.append(
+                {
+                    "id": "container-review-surface",
+                    "title": "Containerized deployment surface discovered",
+                    "severity": "info",
+                    "cwe_id": None,
+                    "url": state["target_url"],
+                    "parameter": None,
+                    "payload": None,
+                    "evidence": repo_text[:500],
+                    "confidence": 0.7,
+                    "reproduction_steps": [
+                        "Review Docker and deployment manifests for exposed services, secrets, and weak defaults.",
+                    ],
+                    "rationale": "Infrastructure files expand the attack surface and should be reviewed alongside application code.",
+                }
+            )
 
     return drafts
 

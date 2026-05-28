@@ -4,7 +4,8 @@ import asyncio
 from typing import Any
 
 from armorscan.tools.nuclei_tools import run_nuclei_scan
-from armorscan.tools.sast_tools import run_bandit_scan, run_semgrep_scan
+from armorscan.tools.sast_tools import run_bandit_scan, run_gitleaks_scan, run_semgrep_scan, run_trivy_scan
+from armorscan.tools.zap_tools import run_zap_baseline_scan
 
 
 async def run_scanning_engines(state: dict[str, Any]) -> dict[str, Any]:
@@ -16,11 +17,14 @@ async def run_scanning_engines(state: dict[str, Any]) -> dict[str, Any]:
     tasks = []
     if scan_type in {"url", "api"}:
         tasks.append(run_nuclei_scan(target, intent_plan=intent_plan, token=token))
+        tasks.append(run_zap_baseline_scan(target, intent_plan=intent_plan, token=token))
     if scan_type == "github":
         tasks.extend(
             [
                 run_semgrep_scan(target, intent_plan=intent_plan, token=token),
                 run_bandit_scan(target, intent_plan=intent_plan, token=token),
+                run_gitleaks_scan(target, intent_plan=intent_plan, token=token),
+                run_trivy_scan(target, intent_plan=intent_plan, token=token),
             ]
         )
 
