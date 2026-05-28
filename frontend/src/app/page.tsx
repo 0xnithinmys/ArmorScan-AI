@@ -158,6 +158,7 @@ export default function Home() {
   const [scans, setScans] = useState<Scan[]>([]);
   const [findings, setFindings] = useState<Finding[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
+  const [streamEvents, setStreamEvents] = useState<string[]>([]);
   const [selectedScanId, setSelectedScanId] = useState("");
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
   const [authForm, setAuthForm] = useState({
@@ -228,6 +229,21 @@ export default function Home() {
       });
     });
   }, [refreshData, token]);
+
+  useEffect(() => {
+    if (!selectedScanId || !token) return;
+    const wsBase = API_BASE.replace(/^http/, "ws");
+    const socket = new WebSocket(
+      `${wsBase}/ws/scans/${selectedScanId}/stream?token=${encodeURIComponent(token)}`,
+    );
+    socket.onmessage = (event) => {
+      setStreamEvents((current) => [event.data, ...current].slice(0, 8));
+    };
+    socket.onerror = () => {
+      setStreamEvents((current) => ["WebSocket stream unavailable; backend will fall back to polling when connected.", ...current].slice(0, 8));
+    };
+    return () => socket.close();
+  }, [selectedScanId, token]);
 
   async function handleAuth(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -419,7 +435,7 @@ export default function Home() {
           </div>
 
           <nav className="mt-6 grid gap-2 text-sm">
-            {["Auth", "Targets", "Scans", "Findings", "Reports", "Audit", "Policy"].map((item) => (
+            {["Auth", "Targets", "Scans", "Findings", "Reports", "Audit", "Policy", "Stream"].map((item) => (
               <a
                 key={item}
                 href={`#${item.toLowerCase()}`}
@@ -437,10 +453,11 @@ export default function Home() {
               setToken("");
               setUser(null);
               setTargets([]);
-              setScans([]);
-              setFindings([]);
-              setAuditEvents([]);
-            }}
+                setScans([]);
+                setFindings([]);
+                setAuditEvents([]);
+                setStreamEvents([]);
+              }}
           >
             Sign out / clear token
           </button>
@@ -545,7 +562,7 @@ export default function Home() {
               <p className="text-xs uppercase tracking-[0.3em] text-[#d7f266]">Targets API</p>
               <h3 className="mt-2 text-2xl font-semibold text-white">Create target</h3>
               <div className="mt-5 grid gap-3 md:grid-cols-2">
-                <input className="field" placeholder="Target name" value={targetForm.name} onChange={(e) => setTargetForm({ ...targetForm, name: e.target.value })} />
+                <input className="field" placeholder="Target name (optional)" value={targetForm.name} onChange={(e) => setTargetForm({ ...targetForm, name: e.target.value })} />
                 <select className="field" value={targetForm.target_type} onChange={(e) => setTargetForm({ ...targetForm, target_type: e.target.value })}>
                   <option value="url">URL</option>
                   <option value="api">API</option>
@@ -603,7 +620,7 @@ export default function Home() {
                 </select>
                 {scanForm.target_id === "__new__" && (
                   <>
-                    <input className="field" placeholder="Inline target name" value={scanForm.target_name} onChange={(e) => setScanForm({ ...scanForm, target_name: e.target.value })} />
+                    <input className="field" placeholder="Inline target name (optional)" value={scanForm.target_name} onChange={(e) => setScanForm({ ...scanForm, target_name: e.target.value })} />
                     <input className="field" placeholder="Inline target URL/repo" value={scanForm.target_url} onChange={(e) => setScanForm({ ...scanForm, target_url: e.target.value })} />
                   </>
                 )}
@@ -687,6 +704,7 @@ export default function Home() {
               )}
             </Panel>
 
+            <section id="reports">
             <Panel title="Selected scan report" eyebrow="Phase 8 exports">
               <div className="rounded-[24px] border border-white/10 bg-[#07111c] p-4">
                 <p className="text-sm text-white/56">Target</p>
@@ -713,14 +731,17 @@ export default function Home() {
                 ))}
               </div>
             </Panel>
+            </section>
           </section>
 
           <section id="audit" className="grid gap-5 xl:grid-cols-[0.8fr_1.2fr]">
+            <div id="policy">
             <Panel title="ArmorIQ policy" eyebrow="Signed intent plan">
               <pre className="max-h-[420px] overflow-auto rounded-[22px] border border-white/10 bg-[#050b12] p-4 text-xs leading-6 text-white/68">
                 {JSON.stringify(selectedScan?.intent_plan ?? { message: "Select or run a scan to see signed policy scope." }, null, 2)}
               </pre>
             </Panel>
+            </div>
 
             <Panel title="Audit trail" eyebrow="GET /audit">
               {auditEvents.length === 0 ? (
@@ -735,6 +756,22 @@ export default function Home() {
                       </div>
                       <p className="mt-2 text-sm leading-6 text-white/74">{event.message}</p>
                     </article>
+                  ))}
+                </div>
+              )}
+            </Panel>
+          </section>
+
+          <section id="stream">
+            <Panel title="Live scan stream" eyebrow="WS /ws/scans/{scan_id}/stream">
+              {streamEvents.length === 0 ? (
+                <EmptyState text="Select a scan to watch worker events from the backend WebSocket stream." />
+              ) : (
+                <div className="grid gap-3">
+                  {streamEvents.map((event, index) => (
+                    <pre key={`${event}-${index}`} className="overflow-auto rounded-[18px] border border-white/10 bg-[#050b12] p-3 text-xs leading-5 text-white/64">
+                      {event}
+                    </pre>
                   ))}
                 </div>
               )}

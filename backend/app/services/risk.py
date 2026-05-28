@@ -31,10 +31,27 @@ CONTEXT_KEYWORDS = {
 }
 SOURCE_MODIFIERS = {
     "nuclei": 4,
+    "owasp-zap": 4,
     "semgrep": 2,
     "bandit": 2,
+    "gitleaks": 4,
+    "trivy": 3,
     "semgrep-fallback": -5,
     "bandit-fallback": -5,
+}
+
+OWASP_CATEGORY_MAP = {
+    "CWE-79": "A03:2021 - Injection",
+    "CWE-78": "A03:2021 - Injection",
+    "CWE-89": "A03:2021 - Injection",
+    "CWE-95": "A03:2021 - Injection",
+    "CWE-200": "A01:2021 - Broken Access Control",
+    "CWE-287": "A07:2021 - Identification and Authentication Failures",
+    "CWE-295": "A02:2021 - Cryptographic Failures",
+    "CWE-502": "A08:2021 - Software and Data Integrity Failures",
+    "CWE-798": "A07:2021 - Identification and Authentication Failures",
+    "CWE-942": "A05:2021 - Security Misconfiguration",
+    "CWE-693": "A05:2021 - Security Misconfiguration",
 }
 
 
@@ -110,6 +127,7 @@ def score_finding(finding: dict[str, Any]) -> dict[str, Any]:
         {
             "risk_score": score,
             "risk_rating": rating,
+            "owasp_category": map_owasp_category(finding),
             "risk_factors": {
                 "severity_base": base,
                 "confidence_modifier": confidence_modifier,
@@ -122,6 +140,20 @@ def score_finding(finding: dict[str, Any]) -> dict[str, Any]:
         }
     )
     return scored
+
+
+def map_owasp_category(finding: dict[str, Any]) -> str | None:
+    cwe_id = str(finding.get("cwe_id") or "").upper()
+    if cwe_id and cwe_id in OWASP_CATEGORY_MAP:
+        return OWASP_CATEGORY_MAP[cwe_id]
+    text = _text_for(finding)
+    if "secret" in text or "token" in text or "password" in text:
+        return "A07:2021 - Identification and Authentication Failures"
+    if "header" in text or "csp" in text or "cors" in text or "misconfig" in text:
+        return "A05:2021 - Security Misconfiguration"
+    if "dependency" in text or "vulnerab" in text:
+        return "A06:2021 - Vulnerable and Outdated Components"
+    return None
 
 
 def scored_remediation(finding: dict[str, Any]) -> str:
@@ -162,6 +194,11 @@ def build_risk_summary(findings: Iterable[dict[str, Any]]) -> dict[str, Any]:
 def build_risk_report(*, scan: dict[str, Any], target: dict[str, Any], findings: list[dict[str, Any]]) -> dict[str, Any]:
     scored_findings = enrich_findings_with_risk(findings)
     summary = build_risk_summary(scored_findings)
+    owasp_categories: dict[str, int] = {}
+    for finding in scored_findings:
+        category = finding.get("owasp_category")
+        if category:
+            owasp_categories[category] = owasp_categories.get(category, 0) + 1
     return {
         "version": "armorscan.report.v1",
         "scan": scan,
@@ -170,6 +207,7 @@ def build_risk_report(*, scan: dict[str, Any], target: dict[str, Any], findings:
             "overall_risk_score": summary["overall_risk_score"],
             "overall_risk_rating": summary["overall_risk_rating"],
             "risk_counts": summary["risk_counts"],
+            "owasp_top10_coverage": owasp_categories,
             "narrative": _executive_narrative(summary),
         },
         "findings": scored_findings,
@@ -214,6 +252,7 @@ def render_markdown_report(report: dict[str, Any]) -> str:
                 f"- Risk: {finding.get('risk_rating')} ({finding.get('risk_score')}/100)",
                 f"- Severity: {finding.get('severity')} | Confidence: {finding.get('confidence')}%",
                 f"- Location: {finding.get('location')}",
+                f"- OWASP: {finding.get('owasp_category') or 'unmapped'}",
                 f"- Impact: {finding.get('business_impact')}",
                 f"- Remediation: {finding.get('remediation')}",
             ]

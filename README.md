@@ -445,6 +445,8 @@ uvicorn app.main:app --reload --port 8000
 **Optional scanner CLIs** (Phase 7):
 ```bash
 pip install semgrep bandit
+# Optional repo scanners: install `gitleaks` and `trivy`, then ensure both are on PATH.
+# Optional web scanner: install OWASP ZAP baseline (`zap-baseline.py`) and ensure it is on PATH.
 # Install nuclei separately from ProjectDiscovery, then ensure `nuclei` is on PATH.
 ```
 

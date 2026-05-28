@@ -21,8 +21,11 @@ SAFE_ACTIONS = {
     "browser.capture_network",
     "browser.capture_screenshot",
     "scanner.nuclei",
+    "scanner.zap",
     "scanner.semgrep",
     "scanner.bandit",
+    "scanner.gitleaks",
+    "scanner.trivy",
 }
 BLOCKED_PAYLOAD_MARKERS = [
     "rm -rf",
