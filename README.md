@@ -1,502 +1,325 @@
 # ArmorScan AI
 
-> **AI-native autonomous web security auditing platform.**
-> Combines LangGraph multi-agent reasoning with Playwright browser automation and ArmorIQ cryptographic intent verification to deliver intelligent, explainable, and governed vulnerability detection.
+ArmorScan AI is a security auditing platform with a web control plane, a FastAPI orchestration API, asynchronous scan workers, and AI-assisted scanning agents.
 
-[![Python](https://img.shields.io/badge/Python-3.12-blue)](https://python.org)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-green)](https://fastapi.tiangolo.com)
-[![Next.js](https://img.shields.io/badge/Next.js-14-black)](https://nextjs.org)
-[![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
+It is built for a local workflow where you can:
+- register approved targets
+- verify target authorization
+- queue governed scans for URLs, APIs, and repositories
+- stream scan progress live
+- review findings and evidence
+- export reports in multiple formats
 
----
+## Project Summary
 
-## Table of Contents
+ArmorScan AI is organized as a local-first security operations application:
+- the `frontend` is the operator dashboard
+- the `backend` is the API and orchestration layer
+- the `worker` executes scan jobs asynchronously
+- the `agents` package performs the actual scan workflow
+- PostgreSQL stores operational data and Redis powers queues plus live events
 
-- [Problem Statement](#problem-statement)
-- [Product Vision](#product-vision)
-- [Architecture Overview](#architecture-overview)
-- [Tech Stack](#tech-stack)
-- [Project Structure](#project-structure)
-- [Multi-Agent System](#multi-agent-system)
-- [AI Agent Workflow (ReAct)](#ai-agent-workflow-react)
-- [Scan Pipeline](#scan-pipeline)
-- [Database Design](#database-design)
-- [Security & Governance](#security--governance)
-- [Risk Scoring System](#risk-scoring-system)
-- [Report Generation](#report-generation)
-- [CI/CD Integration](#cicd-integration)
-- [Quick Start](#quick-start)
-- [Service URLs](#service-urls)
-- [Roadmap](#roadmap)
+In practice, the product flow is simple:
+1. create an account
+2. register a target
+3. verify that the target is authorized
+4. queue a governed scan
+5. review findings
+6. export the final report
 
----
+## What This Project Includes
 
-## Problem Statement
+| Area | Purpose |
+|---|---|
+| Frontend | Next.js dashboard for auth, targets, scans, findings, reports, and audit events |
+| Backend | FastAPI API for auth, target management, scan orchestration, findings, reports, and WebSocket events |
+| Worker | Celery worker that executes scan jobs asynchronously |
+| Agents | Python scan workflow that performs recon, browser analysis, API discovery, repo inspection, risk analysis, and reporting |
+| Storage | PostgreSQL for persistent data and Redis for Celery plus live event streaming |
 
-Traditional SAST/DAST tools suffer from **90%+ false positive rates** due to rigid, signature-based rules that lack contextual awareness of an application's business logic. Modern SPAs with dynamic routing and async APIs break legacy crawlers. Meanwhile, unconstrained AI agents introduce severe risks — over 50% of malicious prompts succeed against agentic systems, with unconfined agents executing up to 80% of malicious intents.
+## Core Capabilities
 
-**ArmorScan AI** solves this by marrying LLM contextual reasoning with deterministic browser automation, all governed by cryptographic intent verification.
+- Target registry for `url`, `api`, and `github` scan targets
+- Authorization proof flow for DNS TXT, HTTP file, meta tag, GitHub file, or manual attestation
+- Governed scan execution with signed intent plans and policy decisions
+- Live scan updates over WebSocket
+- Findings workflow with status changes, evidence, comments, suppression, and history
+- Report export in `json`, `markdown`, `pdf`, and `sarif`
+- Audit trail for key policy and execution events
 
----
+## Technology Stack
 
-## Product Vision
+| Layer | Technology |
+|---|---|
+| Frontend | Next.js, React, TypeScript |
+| Backend API | FastAPI, Pydantic, SQLAlchemy |
+| Async Jobs | Celery |
+| Scan Workflow | Python agent pipeline with LangGraph-compatible workflow structure |
+| Browser Automation | Playwright |
+| Database | PostgreSQL |
+| Queue and Event Transport | Redis |
+| Reports | JSON, Markdown, PDF, SARIF |
 
-ArmorScan AI transforms vulnerability detection from a rigid scanning process into an **intelligent, explainable, governed agentic workflow**:
+## Architecture
 
-- **Input flexibility** — accepts a deployed URL, GitHub repository, or API endpoint
-- **Autonomous crawling** — maps interactive surfaces including inputs, routes, auth systems, upload fields
-- **Intelligent testing** — generates context-aware payloads for SQLi, XSS, SSTI, SSRF, CSRF, command injection, prompt injection, API misuse
-- **Explainable output** — developer-friendly reports detailing *what*, *where*, *why*, *attack vectors*, *severity*, *reproduction steps*, and *fix code*
-- **Cryptographic governance** — every tool invocation verified against a signed intent plan via ArmorIQ
+```mermaid
+flowchart LR
+    U[User in Browser] --> FE[Next.js Frontend\nlocalhost:3000]
+    FE -->|REST| API[FastAPI Backend\nlocalhost:8000/api/v1]
+    FE -->|WebSocket| API
 
----
+    API --> DB[(PostgreSQL)]
+    API --> REDIS[(Redis)]
+    API -->|Dispatch scan job| W[Celery Worker\nscans queue]
 
-## Architecture Overview
+    W --> AG[ArmorScan Agents\nLangGraph workflow]
+    AG --> PW[Playwright]
+    AG --> SE[Scanning engines]
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           PRESENTATION LAYER                                │
-│                                                                             │
-│   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │              Next.js 14 (App Router) + TypeScript + Tailwind        │   │
-│   │                                                                     │   │
-│   │  Landing Page ─── Scan Config ─── Live Console ─── Report Dashboard │   │
-│   │  Finding Detail ─── Audit Log ─── Scan History ─── Auth Pages       │   │
-│   └───────────────────────────────┬─────────────────────────────────────┘   │
-│                                   │ REST + WebSocket                        │
-└───────────────────────────────────┼─────────────────────────────────────────┘
-                                    │
-┌───────────────────────────────────┼─────────────────────────────────────────┐
-│                         ORCHESTRATION LAYER                                 │
-│                                   │                                         │
-│   ┌───────────────────────────────▼─────────────────────────────────────┐   │
-│   │                    FastAPI Gateway (Python)                          │   │
-│   │                                                                     │   │
-│   │  /auth ── /targets ── /scans ── /findings ── /reports ── /audit     │   │
-│   │                    WebSocket: /ws/scans/{id}/stream                  │   │
-│   └──────────┬──────────────────────────────┬───────────────────────────┘   │
-│              │                              │                               │
-│   ┌──────────▼──────────┐       ┌───────────▼───────────────────────┐      │
-│   │   PostgreSQL 16     │       │   Redis 7                         │      │
-│   │                     │       │                                   │      │
-│   │  Users, Targets,    │       │  Celery Broker + Result Backend   │      │
-│   │  Scans, Findings,   │       │  Semantic Cache                   │      │
-│   │  Audit Logs         │       │  Pub/Sub (real-time trace stream) │      │
-│   └─────────────────────┘       └───────────┬───────────────────────┘      │
-│                                              │                              │
-└──────────────────────────────────────────────┼──────────────────────────────┘
-                                               │
-┌──────────────────────────────────────────────┼──────────────────────────────┐
-│                           AGENT LAYER                                       │
-│                                              │                              │
-│   ┌──────────────────────────────────────────▼──────────────────────────┐   │
-│   │                Celery Workers (scans queue)                          │   │
-│   │                                                                     │   │
-│   │  ┌───────────────────────────────────────────────────────────────┐  │   │
-│   │  │              LangGraph State Machine (ReAct Loop)             │  │   │
-│   │  │                                                               │  │   │
-│   │  │  ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐  │  │   │
-│   │  │  │  Recon   │──▶│ Analysis │──▶│ Exploit  │──▶│ Reporter │  │  │   │
-│   │  │  │  Agent   │   │  Agent   │   │  Agent   │   │  Agent   │  │  │   │
-│   │  │  └────┬─────┘   └──────────┘   └────┬─────┘   └──────────┘  │  │   │
-│   │  │       │                              │                        │  │   │
-│   │  └───────┼──────────────────────────────┼────────────────────────┘  │   │
-│   └──────────┼──────────────────────────────┼──────────────────────────┘   │
-│              │                              │                               │
-│   ┌──────────▼──────────┐       ┌───────────▼───────────────────────┐      │
-│   │ Playwright (headless)│       │   ArmorIQ Policy Engine          │      │
-│   │                     │       │                                   │      │
-│   │ Accessibility Tree  │       │  ArmorClaw Plugin (intercepts     │      │
-│   │ DOM Interaction     │       │  every tool call, validates       │      │
-│   │ Network Interception│       │  against signed intent token)     │      │
-│   │ Payload Injection   │       │  Fail-closed architecture         │      │
-│   └─────────────────────┘       └───────────────────────────────────┘      │
-│                                                                             │
-│   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │                    External Scanning Tools                          │   │
-│   │                                                                     │   │
-│   │  Nuclei (CVE templates)  ──  Semgrep/Bandit/Trivy (SAST)           │   │
-│   └─────────────────────────────────────────────────────────────────────┘   │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+    W --> DB
+    W --> REDIS
+    API --> REP[Report exports\nJSON / Markdown / PDF / SARIF]
 ```
 
----
+## Scan Flow
 
-## Tech Stack
+```mermaid
+sequenceDiagram
+    participant User
+    participant UI as Frontend
+    participant API as Backend API
+    participant Policy as Policy Engine
+    participant Worker as Celery Worker
+    participant Agents as Scan Agents
+    participant DB as PostgreSQL
 
-| Component | Technology | Why |
-|---|---|---|
-| **Frontend** | Next.js 14 + TypeScript + Tailwind CSS | App Router with Server Components, Suspense, and Server Actions for reactive dashboards |
-| **Backend API** | FastAPI + Pydantic v2 + async SQLAlchemy | High-performance async, native type validation for LLM-generated JSON |
-| **Migrations** | Alembic | Async-compatible PostgreSQL schema versioning |
-| **Task Queue** | Celery + Redis | Distributed long-running scan jobs decoupled from the API |
-| **AI Agents** | LangGraph + LangChain | Cyclic stateful multi-agent workflows with built-in memory |
-| **Primary LLM** | Claude 3.5 Sonnet | Industry-leading code reasoning, massive context, strict prompt adherence |
-| **Fallback LLM** | GPT-4o | Deep logic engine for complex business logic flaw validation |
-| **Local LLM** | Llama 3.1 (8B/70B) via Ollama | High-volume summarization and template generation to reduce API costs |
-| **Browser Automation** | Playwright (headless Chromium) | Accessibility tree extraction, SPA crawling, payload injection |
-| **Database** | PostgreSQL 16 | ACID-compliant relational storage for all entities |
-| **Policy Engine** | ArmorIQ SDK + ArmorClaw | Cryptographic intent verification, prompt injection protection |
-| **Scanning** | Nuclei, Semgrep, Bandit, Trivy | Deterministic CVE checks and static analysis baselines |
-
----
-
-## Project Structure
-
+    User->>UI: Register or sign in
+    User->>UI: Create target
+    UI->>API: POST /auth and POST /targets
+    User->>UI: Verify target authorization
+    UI->>API: POST /targets/{id}/proofs/challenge and /authorize
+    User->>UI: Queue scan
+    UI->>API: POST /scans
+    API->>Policy: Evaluate request and sign intent plan
+    API->>Worker: Dispatch scan job
+    Worker->>Agents: Run scan workflow
+    Agents-->>Worker: Findings, trace, report data
+    Worker->>DB: Persist scan state and findings
+    API-->>UI: REST responses and live WebSocket events
+    User->>UI: Export report
+    UI->>API: GET /reports/{scan_id}/*
 ```
+
+## Main Product Areas
+
+| Module | What you do there |
+|---|---|
+| Dashboard | View the overall platform state |
+| Targets | Create targets and manage authorization verification |
+| Scans | Queue new scans, watch live progress, inspect intent plans |
+| Findings | Review prioritized findings and update remediation status |
+| Reports | Export scan output in operational formats |
+| Audit | Review governance and execution events |
+| Login | Register a user and sign in locally |
+
+## How It Works Locally
+
+When running locally, the app behaves like this:
+
+1. The frontend calls the backend at `/api/v1`
+2. The backend validates the request, creates the scan record, and signs an intent plan
+3. The backend dispatches a Celery task to the `scans` queue
+4. The worker runs the scan workflow from the `agents` package
+5. Findings, trace data, and reports are stored in PostgreSQL
+6. Live events are streamed back to the UI through WebSocket updates
+
+## API Surface
+
+| Endpoint Group | Purpose |
+|---|---|
+| `/api/v1/auth` | Register, log in, and fetch the current user |
+| `/api/v1/organizations` | Organization and access context |
+| `/api/v1/targets` | Target CRUD and authorization proof workflows |
+| `/api/v1/scans` | Queue, inspect, cancel, and fetch scan-related data |
+| `/api/v1/findings` | List findings, update status, add evidence and comments |
+| `/api/v1/reports` | Export PDF, Markdown, JSON, and SARIF reports |
+| `/api/v1/audit` | Review audit and policy events |
+| `/api/v1/ws` | Live scan event stream |
+
+## Repository Layout
+
+```text
 ArmorScan AI/
-├── frontend/                    # Next.js 14 App Router
-│   ├── src/
-│   │   ├── app/                 # App Router pages & layouts
-│   │   └── ...
-│   ├── Dockerfile
-│   ├── .prettierrc
-│   └── package.json
-│
-├── backend/                     # FastAPI API Gateway
-│   ├── app/
-│   │   ├── main.py              # App entry point + lifespan
-│   │   ├── core/
-│   │   │   ├── config.py        # Pydantic settings (.env)
-│   │   │   ├── database.py      # Async SQLAlchemy engine + sessions
-│   │   │   ├── security.py      # JWT + bcrypt
-│   │   │   └── celery_app.py    # Celery configuration
-│   │   ├── api/v1/
-│   │   │   ├── router.py        # Composes all endpoint modules
-│   │   │   └── endpoints/
-│   │   │       ├── auth.py      # Register, login, JWT
-│   │   │       ├── targets.py   # Asset CRUD + authorization proofs
-│   │   │       ├── scans.py     # Initiate, status, cancel
-│   │   │       ├── findings.py  # List, filter, update status
-│   │   │       ├── reports.py   # PDF / JSON / SARIF export
-│   │   │       ├── audit.py     # ArmorIQ audit events
-│   │   │       └── ws.py        # WebSocket real-time scan stream
-│   │   ├── models/              # SQLAlchemy ORM models (Phase 3)
-│   │   └── workers/
-│   │       └── scan_worker.py   # Celery scan task
-│   ├── alembic/                 # Database migrations
-│   ├── requirements.txt
-│   ├── pyproject.toml           # Ruff + pytest + mypy
-│   └── Dockerfile
-│
-├── agents/                      # LangGraph Multi-Agent System
-│   ├── armorscan/
-│   │   ├── graph.py             # State machine: Recon → Analysis → Exploit → Report
-│   │   ├── state.py             # ScanState TypedDict (shared state)
-│   │   ├── agents/              # Agent implementations (Phase 4)
-│   │   │   ├── recon.py
-│   │   │   ├── analysis.py
-│   │   │   ├── exploit.py
-│   │   │   └── reporter.py
-│   │   └── tools/               # Tool wrappers (Phase 4-5)
-│   │       ├── playwright_tools.py
-│   │       ├── nuclei_tools.py
-│   │       └── http_tools.py
-│   ├── requirements.txt
-│   ├── pyproject.toml
-│   └── Dockerfile
-│
-├── infra/                       # Kubernetes manifests (Phase 10)
-├── docker-compose.yml           # Full local dev stack (7 services)
-├── .env / .env.example
-├── .gitignore
-└── README.md
+|-- frontend/          # Next.js application
+|-- backend/           # FastAPI application and Celery worker code
+|-- agents/            # Scan workflow and agent tooling
+|-- docker-compose.yml # Local multi-service stack
+|-- README.md
 ```
 
----
-
-## Multi-Agent System
-
-ArmorScan AI decomposes scanning into 4 specialized agents, each with a distinct role:
-
-```
-┌─────────────┐     ┌─────────────────┐     ┌──────────────────────┐     ┌─────────────────┐
-│    RECON     │────▶│    ANALYSIS      │────▶│  EXPLOIT/VALIDATE    │────▶│    REPORTER      │
-│    Agent     │     │    Agent         │     │    Agent             │     │    Agent         │
-├─────────────┤     ├─────────────────┤     ├──────────────────────┤     ├─────────────────┤
-│ Playwright   │     │ State graph     │     │ Payload generation   │     │ Log translation │
-│ + Firecrawl  │     │ + CWE/CVE DB    │     │ + safe injection     │     │ + dev-friendly  │
-│              │     │ correlation     │     │ + false positive     │     │   narrative     │
-│ Outputs:     │     │                 │     │   filtering (ReAct)  │     │                 │
-│ - Routes     │     │ Outputs:        │     │                      │     │ Outputs:        │
-│ - Forms      │     │ - Prioritized   │     │ Outputs:             │     │ - Structured    │
-│ - Inputs     │     │   attack surface│     │ - Validated findings │     │   findings JSON │
-│ - Tech stack │     │                 │     │ - PoC evidence       │     │ - Reports       │
-│ - State graph│     │                 │     │                      │     │                 │
-└─────────────┘     └─────────────────┘     └──────────────────────┘     └─────────────────┘
-```
-
-| Agent | Role | LLM |
-|---|---|---|
-| **Reconnaissance** | Surface mapping — crawls SPA via Playwright, extracts accessibility tree, discovers routes/forms/inputs/APIs | Claude 3.5 Sonnet |
-| **Vulnerability Analysis** | Strategic planner — correlates discovered endpoints with CWE/CVE databases, prioritizes attack matrix | Claude 3.5 Sonnet |
-| **Exploitation & Validation** | Offensive engine — crafts context-aware payloads, injects via Playwright/HTTP, filters false positives with proof-of-concept validation | Claude 3.5 Sonnet / GPT-4o |
-| **Reporting & Triage** | Communication layer — translates dense execution logs into structured, developer-friendly narratives | Llama 3.1 (local) |
-
----
-
-## AI Agent Workflow (ReAct)
-
-Each agent operates on a **Reason → Act → Observe → Reflect** state machine:
-
-```
-          ┌──────────────────────────────────────────────────────────────┐
-          │                                                              │
-          ▼                                                              │
-    ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐    │
-    │   IDLE   │────▶│ PLANNING │────▶│EXECUTING │────▶│OBSERVING │    │
-    │          │     │          │     │          │     │          │    │
-    │ Awaits   │     │ Generate │     │ Invoke   │     │ Capture  │    │
-    │ scan job │     │ intent   │     │ tools    │     │ results  │    │
-    │          │     │ plan →   │     │ via MCP  │     │ (HTTP,   │    │
-    │          │     │ ArmorIQ  │     │          │     │  DOM,    │    │
-    │          │     │ sign it  │     │          │     │  a11y)   │    │
-    └──────────┘     └──────────┘     └──────────┘     └────┬─────┘    │
-                                                            │          │
-                                                            ▼          │
-                                                      ┌──────────┐    │
-                                                      │REFLECTING│    │
-                                                      │          │    │
-                                                      │ CoT      │────┘
-                                                      │ analysis │ (loop back if ambiguous)
-                                                      │ false    │
-                                                      │ positive │──────▶ ┌───────────┐
-                                                      │ filter   │        │ COMPLETED │
-                                                      └──────────┘        └───────────┘
-```
-
----
-
-## Scan Pipeline
-
-```
-User submits target
-        │
-        ▼
-┌─────────────────────┐     ┌──────────────────────┐     ┌─────────────────────┐
-│ 1. INGESTION &      │────▶│ 2. CRAWLER-BASED     │────▶│ 3. CONTEXTUAL       │
-│    POLICY GATING    │     │    DISCOVERY          │     │    ANALYSIS         │
-│                     │     │                      │     │                     │
-│ • Verify ownership  │     │ • Playwright FSM     │     │ • Detect tech stack │
-│ • Load ArmorIQ      │     │ • Click, fill, nav   │     │ • Formulate         │
-│   policies          │     │ • Map all routes,    │     │   targeted plan     │
-│ • DNS TXT / meta /  │     │   forms, inputs      │     │ • Skip irrelevant   │
-│   OAuth check       │     │ • Network intercept  │     │   payloads          │
-└─────────────────────┘     └──────────────────────┘     └──────────┬──────────┘
-                                                                    │
-        ┌───────────────────────────────────────────────────────────┘
-        │
-        ▼
-┌─────────────────────┐     ┌──────────────────────┐     ┌─────────────────────┐
-│ 4. DYNAMIC PAYLOAD  │────▶│ 5. RESPONSE          │────▶│ 6. TRIAGE           │
-│    GENERATION       │     │    ANALYSIS           │     │                     │
-│                     │     │                      │     │ • Cross-reference   │
-│ • AI-crafted        │     │ • HTTP status codes  │     │   all findings      │
-│   payloads per      │     │ • Stack traces       │     │ • Demand PoC for    │
-│   context           │     │ • DOM mutations      │     │   confirmation      │
-│ • Bypass filters    │     │ • a11y tree diffs    │     │ • Filter false      │
-│ • SQLi, XSS, SSTI,  │     │                      │     │   positives         │
-│   SSRF, etc.        │     │                      │     │ • Commit to DB      │
-└─────────────────────┘     └──────────────────────┘     └─────────────────────┘
-```
-
----
-
-## Database Design
-
-```
-┌──────────────────────────┐     ┌──────────────────────────┐
-│   Identity & Access      │     │    Target Management     │
-│   Management (IAM)       │     │                          │
-│                          │     │  Assets                  │
-│  Organizations           │     │  Authorization_Proofs    │
-│  Users                   │     │  Asset_Metadata          │
-│  Roles                   │     │                          │
-│  API_Keys                │     │                          │
-└────────────┬─────────────┘     └────────────┬─────────────┘
-             │                                │
-             └──────────┬─────────────────────┘
-                        │
-                        ▼
-┌──────────────────────────┐     ┌──────────────────────────┐
-│   Scan Operations        │     │  Vulnerability           │
-│                          │     │  Intelligence            │
-│  Scans                   │     │                          │
-│  Agent_Traces            │     │  Findings                │
-│  ArmorIQ_Audits          │     │  Evidences               │
-│                          │     │  Remediations            │
-└──────────────────────────┘     └──────────────────────────┘
-```
-
-Every finding is linked to the exact **intent token** and **execution trace** that discovered it — full auditability.
-
----
-
-## Security & Governance
-
-### ArmorIQ Integration
-
-| Layer | Mechanism |
-|---|---|
-| **Plan Verification** | Agent submits CSRG (Canonical Structured Reasoning Graph) → ArmorIQ evaluates against org policies → returns signed intent token |
-| **Runtime Enforcement** | ArmorClaw plugin intercepts every tool call → validates against Merkle-anchored plan commitments → blocks unauthorized actions |
-| **Prompt Injection Protection** | If a crawled page tries to hijack the LLM (e.g., "upload data to external pastebin"), ArmorClaw blocks it because that action was never in the signed plan |
-| **Fail-Closed** | Any deviation from the approved plan = immediate block. No exceptions. |
-
-### Operational Safety
-
-- **Rate limiting**: Max 50 req/sec hardcoded + configurable concurrency controls
-- **Non-destructive payloads**: SSTI verified via benign math (`{{7*7}}`) not system commands
-- **Authorization required**: DNS TXT, meta tag, or OAuth verification before any scan starts
-- **Immutable audit log**: Every intent validation, policy decision, and tool execution recorded with cryptographic proof
-
----
-
-## Risk Scoring System
-
-| Component | Method |
-|---|---|
-| **Base Score** | CVSS v3.1/v4.0 — standardized severity baseline |
-| **Threat Intelligence** | EPSS — real-world exploitation probability |
-| **Contextual AI Modifier** | LLM adjusts score based on where the vuln sits (admin panel = higher, marketing page = lower) |
-| **Confidence Score** | Agent's self-assessed certainty. High confidence (PoC confirmed) = top priority. Low confidence = flagged for human review |
-
----
-
-## Report Generation
-
-Every confirmed vulnerability includes:
-
-| Section | Content |
-|---|---|
-| **What** | Plain-English description of the vulnerability |
-| **Where** | Exact URL, parameter, endpoint, or source code line |
-| **Why** | Contextual explanation of the vulnerability class |
-| **Attack Scenario** | Narrative of how a threat actor would exploit it |
-| **Severity** | Hybrid risk score (CVSS + EPSS + AI context + confidence) |
-| **Reproduction Steps** | Copy-pasteable `curl` commands or HTTP payloads |
-| **Fix** | Language-specific code snippets (parameterized queries, output encoding, etc.) |
-
-**Export formats**: Interactive web dashboard, PDF, JSON, SARIF (GitHub Security tab)
-
----
-
-## CI/CD Integration
-
-```
-Pull Request Created
-        │
-        ▼
-┌─────────────────────┐     ┌──────────────────────┐     ┌─────────────────────┐
-│ Webhook triggers    │────▶│ Differential scan    │────▶│ SARIF upload to     │
-│ ArmorScan CI action │     │ (only changed routes │     │ GitHub Security tab │
-│                     │     │  from git diff)      │     │                     │
-└─────────────────────┘     └──────────────────────┘     └──────────┬──────────┘
-                                                                    │
-                                                          ┌─────────▼──────────┐
-                                                          │ Policy Gate        │
-                                                          │                    │
-                                                          │ CVSS > 7.0 →      │
-                                                          │ Block PR merge     │
-                                                          └────────────────────┘
-```
-
----
-
-## Quick Start
+## Local Setup
 
 ### Prerequisites
-- Docker + Docker Compose
+
+- Docker Desktop with Docker Compose
 - Node.js 20+
 - Python 3.12+
+- Chromium install for Playwright when running the worker outside Docker
 
-### 1. Clone & configure
-```bash
-git clone https://github.com/0xnithinmys/ArmorScan-AI.git
-cd ArmorScan-AI
-cp .env.example .env
-# Fill in your API keys
+### Option 1: Run with Docker
+
+This is the fastest way to start the full stack locally.
+
+1. Create a root `.env` file in the repository.
+
+```env
+SECRET_KEY=change-me
+GROQ_API_KEY=your_key_here
+OPENAI_API_KEY=
+ANTHROPIC_API_KEY=
+ARMORIQ_API_KEY=
+ARMORIQ_API_URL=https://api.armoriq.ai
 ```
 
-### 2. Start all services (Docker)
-```bash
-docker compose up -d
+2. Start the stack.
+
+```powershell
+docker compose up --build -d
 ```
 
-### 3. Or run individually for development
+3. Run database migrations.
 
-**Frontend** (hot reload):
-```bash
+```powershell
+docker compose exec backend alembic upgrade head
+```
+
+4. Open the app.
+
+- Frontend: `http://localhost:3000`
+- API docs: `http://localhost:8000/docs`
+- Flower: `http://localhost:5555`
+
+5. Create a local user account from the login page, then:
+- add a target
+- complete or record an authorization proof
+- queue a scan
+- watch live scan events
+- review findings and export reports
+
+### First Local Run Checklist
+
+After the app is up, use this order:
+
+1. Open `http://localhost:3000`
+2. Create a local account from the login screen
+3. Add a target in the Targets module
+4. Complete a proof flow or record a manual attestation
+5. Open Scans and queue a scan
+6. Watch the live scan stream
+7. Open Findings to review results
+8. Open Reports to export JSON, Markdown, PDF, or SARIF
+
+### Option 2: Run in Development Mode
+
+Use this when you want hot reload for the frontend and backend.
+
+#### 1. Start infrastructure only
+
+```powershell
+docker compose up -d postgres redis
+```
+
+#### 2. Configure backend and worker environment
+
+Create a root `.env` file with the values below.
+
+```env
+SECRET_KEY=change-me
+DATABASE_URL=postgresql+asyncpg://armorscan:armorscan@localhost:5432/armorscan
+REDIS_URL=redis://localhost:6379/0
+CELERY_BROKER_URL=redis://localhost:6379/0
+CELERY_RESULT_BACKEND=redis://localhost:6379/1
+ALLOWED_ORIGINS=["http://localhost:3000"]
+GROQ_API_KEY=your_key_here
+OPENAI_API_KEY=
+ANTHROPIC_API_KEY=
+ARMORIQ_API_KEY=
+ARMORIQ_API_URL=https://api.armoriq.ai
+```
+
+At least one AI provider key should be set for agent reasoning.
+
+#### 3. Start the backend API
+
+```powershell
+cd backend
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+pip install -r ..\agents\requirements.txt
+playwright install chromium
+alembic upgrade head
+uvicorn app.main:app --reload --port 8000
+```
+
+#### 4. Start the scan worker in a new terminal
+
+```powershell
+cd backend
+.\.venv\Scripts\Activate.ps1
+celery -A app.core.celery_app worker --loglevel=info -Q scans
+```
+
+#### 5. Start the frontend
+
+Create `frontend/.env.local`:
+
+```env
+NEXT_PUBLIC_API_BASE_URL=http://localhost:8000/api/v1
+```
+
+Then run:
+
+```powershell
 cd frontend
 npm install
 npm run dev
 ```
 
-**Backend** (hot reload):
-```bash
-cd backend
-python -m venv .venv
-.venv\Scripts\activate       # Windows
-pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
-```
-
-**Optional scanner CLIs** (Phase 7):
-```bash
-pip install semgrep bandit
-# Optional repo scanners: install `gitleaks` and `trivy`, then ensure both are on PATH.
-# Optional web scanner: install OWASP ZAP baseline (`zap-baseline.py`) and ensure it is on PATH.
-# Install nuclei separately from ProjectDiscovery, then ensure `nuclei` is on PATH.
-```
-
-**Report exports** (Phase 8):
-- JSON: `GET /api/v1/reports/{scan_id}/json`
-- SARIF: `GET /api/v1/reports/{scan_id}/sarif`
-- PDF: `GET /api/v1/reports/{scan_id}/pdf`
-- Markdown: `GET /api/v1/reports/{scan_id}/markdown`
-
-**Celery worker**:
-```bash
-cd backend
-celery -A app.core.celery_app worker --loglevel=info -Q scans
-```
-
----
-
-## Service URLs
+## Local URLs
 
 | Service | URL |
 |---|---|
-| Frontend | http://localhost:3000 |
-| API | http://localhost:8000 |
-| API Docs (Swagger) | http://localhost:8000/docs |
-| Celery Flower | http://localhost:5555 |
-| PostgreSQL | localhost:5432 |
-| Redis | localhost:6379 |
+| Frontend | `http://localhost:3000` |
+| Backend API | `http://localhost:8000` |
+| Swagger UI | `http://localhost:8000/docs` |
+| Flower | `http://localhost:5555` |
+| PostgreSQL | `localhost:5432` |
+| Redis | `localhost:6379` |
 
----
+## Optional Security Tooling
 
-## Roadmap
+The scan workflow can use additional local tools when they are available on your machine.
 
-- [x] **Phase 1** — Project foundation & monorepo setup
-- [x] **Phase 2** — Frontend dashboard & UI (Next.js)
-- [x] **Phase 3** — Backend API (FastAPI + PostgreSQL)
-- [x] **Phase 4** — AI agent system (LangGraph)
-- [x] **Phase 5** — Browser automation (Playwright)
-- [x] **Phase 6** — Policy engine (ArmorIQ)
-- [x] **Phase 7** — Scanning engines (Nuclei, Semgrep, Bandit)
-- [x] **Phase 8** — Risk scoring & reporting engine
-- [ ] **Phase 9** — CI/CD integration
-- [ ] **Phase 10** — Production deployment (K8s)
-- [ ] **Phase 11** — Testing & QA
+- `nuclei`
+- `semgrep`
+- `bandit`
+- `trivy`
+- `gitleaks`
+- `zap-baseline.py`
 
-### Future
+These are not required to boot the app, but they improve scanner coverage when installed and available on `PATH`.
 
-- Multimodal Vision Language Models for canvas/clickjacking detection
-- Deep RL-trained agents via self-play against vulnerable apps
-- Autonomous remediation — auto-generate and submit fix PRs
-- Continuous adversarial simulation against production environments
+## Environment Notes
 
----
+- Backend settings load from the root `.env` file
+- Frontend local settings should go in `frontend/.env.local`
+- The frontend uses `NEXT_PUBLIC_API_BASE_URL`
+- The backend requires PostgreSQL and Redis to be reachable before scans can run successfully
+- AI-assisted scan reasoning requires at least one provider key such as `GROQ_API_KEY` or `OPENAI_API_KEY`
 
+## Notes
+
+- The backend does not apply migrations automatically on startup. Run `alembic upgrade head` before using the API against a new database.
+- The Celery worker is the service that runs scans. The separate `agents` container in `docker-compose.yml` is a tooling container, not the main execution path.
+- The frontend derives its WebSocket connection from `NEXT_PUBLIC_API_BASE_URL`, so you only need to set that one frontend environment variable for local development.
