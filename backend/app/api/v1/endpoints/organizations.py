@@ -65,6 +65,30 @@ async def create_organization(
     return OrganizationRead.model_validate(org)
 
 
+@router.delete("/{organization_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_organization(
+    organization_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    await require_org_role(db, organization_id=organization_id, user=current_user, role="owner")
+    result = await db.execute(select(Organization).where(Organization.id == organization_id))
+    org = result.scalar_one_or_none()
+    if org is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
+    db.add(
+        AuditEvent(
+            user_id=current_user.id,
+            event_type="organization.deleted",
+            message=f"Organization {org.name} deleted.",
+            details={"organization_id": organization_id, "slug": org.slug},
+        )
+    )
+    await db.delete(org)
+    await db.commit()
+    return None
+
+
 @router.get("/{organization_id}/members", response_model=list[MembershipRead])
 async def list_members(
     organization_id: str,

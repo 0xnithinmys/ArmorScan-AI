@@ -1,4 +1,6 @@
 from celery import Celery
+import sys
+
 from app.core.config import settings
 
 celery_app = Celery(
@@ -22,3 +24,9 @@ celery_app.conf.update(
         "app.workers.scan_worker.*": {"queue": "scans"},
     },
 )
+
+if sys.platform == "win32":
+    celery_app.conf.update(
+        worker_pool="solo",
+        worker_concurrency=1,
+    )

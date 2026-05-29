@@ -6,12 +6,14 @@ import { useState } from "react";
 import { useAuth } from "../lib/auth-context";
 
 const NAV_LINKS = [
-  { href: "/dashboard", label: "Dashboard" },
+  { href: "/organizations", label: "Organizations" },
   { href: "/targets", label: "Targets" },
   { href: "/scans", label: "Scans" },
   { href: "/findings", label: "Findings" },
   { href: "/reports", label: "Reports" },
+  { href: "/platform", label: "Platform" },
   { href: "/audit", label: "Audit" },
+  { href: "/dashboard", label: "Dashboard" },
 ];
 
 export default function Navbar() {

@@ -3,16 +3,17 @@
 import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "../lib/auth-context";
 import { API_BASE, authHeaders, readError, Finding, Scan, shortId } from "../lib/api";
-import { Panel, EmptyState, SeverityBadge, StatusBadge } from "../components/ui";
+import { Panel, EmptyState, SeverityBadge, StatusBadge, PageLoader } from "../components/ui";
 
 export default function FindingsPage() {
-  const { token } = useAuth();
+  const { token, isLoaded } = useAuth();
   const [findings, setFindings] = useState<Finding[]>([]);
   const [scans, setScans] = useState<Scan[]>([]);
   const [filterScan, setFilterScan] = useState("all");
   const [filterSeverity, setFilterSeverity] = useState("all");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
 
   async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
     const r = await fetch(`${API_BASE}${path}`, {
@@ -24,12 +25,13 @@ export default function FindingsPage() {
   }
 
   const load = useCallback(async () => {
-    if (!token) return;
+    if (!token) { setIsLoading(false); return; }
     const [f, s] = await Promise.all([apiFetch<Finding[]>("/findings/"), apiFetch<Scan[]>("/scans/")]);
     setFindings(f); setScans(s);
+    setIsLoading(false);
   }, [token]);
 
-  useEffect(() => { load().catch(e => setError(e.message)); }, [load]);
+  useEffect(() => { if (!isLoaded) return; load().catch(e => setError(e.message)); }, [load, isLoaded]);
 
   async function updateStatus(id: string, status: string) {
     setError("");
@@ -47,6 +49,8 @@ export default function FindingsPage() {
 
   const critCount = findings.filter(f => f.risk_rating === "critical").length;
   const highCount = findings.filter(f => f.risk_rating === "high").length;
+
+  if (isLoading) return <main className="min-h-screen bg-[#04080f] px-4 py-6 sm:px-6"><div className="mx-auto max-w-[1400px] space-y-5"><div className="h-[120px] rounded-2xl bg-[#080f18] animate-pulse"></div><div className="h-[400px] rounded-2xl bg-[#080f18] animate-pulse"></div></div></main>;
 
   return (
     <main className="min-h-screen bg-[#04080f] px-4 py-6 sm:px-6">

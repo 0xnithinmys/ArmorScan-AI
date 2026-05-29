@@ -9,7 +9,7 @@ const FORMATS = ["json", "sarif", "pdf", "markdown"] as const;
 type Format = typeof FORMATS[number];
 
 export default function ReportsPage() {
-  const { token } = useAuth();
+  const { token, isLoaded } = useAuth();
   const [scans, setScans] = useState<Scan[]>([]);
   const [targets, setTargets] = useState<Target[]>([]);
   const [selectedId, setSelectedId] = useState("");
@@ -29,7 +29,7 @@ export default function ReportsPage() {
     setSelectedId(prev => prev || s[0]?.id || "");
   }, [token]);
 
-  useEffect(() => { load().catch(e => setError(e.message)); }, [load]);
+  useEffect(() => { if (!isLoaded) return; load().catch(e => setError(e.message)); }, [load, isLoaded]);
 
   async function downloadReport(kind: Format) {
     if (!selectedId) return;

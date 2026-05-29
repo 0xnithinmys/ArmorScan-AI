@@ -12,9 +12,18 @@ export type User = {
   created_at: string;
 };
 
+export type Organization = {
+  id: string;
+  name: string;
+  slug: string;
+  created_by_id: string | null;
+  created_at: string;
+};
+
 export type Target = {
   id: string;
   name: string;
+  organization_id: string | null;
   target_type: "url" | "github" | "api" | string;
   target_url: string;
   scope: string[];
@@ -46,7 +55,10 @@ export type AuthorizationProof = {
 export type Scan = {
   id: string;
   target_id: string;
+  organization_id: string | null;
   requested_by_id: string;
+  scan_profile_id: string | null;
+  parent_scan_id: string | null;
   scan_type: string;
   status: string;
   scope: string[];
@@ -60,6 +72,46 @@ export type Scan = {
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
+};
+
+export type Membership = {
+  id: string;
+  organization_id: string;
+  user_id: string;
+  role: string;
+  created_at: string;
+};
+
+export type Team = {
+  id: string;
+  organization_id: string;
+  name: string;
+  slug: string;
+  created_at: string;
+};
+
+export type ScanProfile = {
+  id: string;
+  organization_id: string | null;
+  created_by_id: string | null;
+  name: string;
+  description: string | null;
+  scan_type: string;
+  policy_tier: string;
+  settings_json: Record<string, unknown>;
+  is_default: boolean;
+  created_at: string;
+};
+
+export type ScanArtifact = {
+  id: string;
+  scan_id: string;
+  artifact_type: string;
+  name: string;
+  uri: string | null;
+  content_type: string | null;
+  metadata_json: Record<string, unknown>;
+  created_at: string;
 };
 
 export type Finding = {
@@ -80,6 +132,54 @@ export type Finding = {
   created_at: string;
 };
 
+export type FindingEvidence = {
+  id: string;
+  finding_id: string;
+  evidence_type: string;
+  title: string;
+  content: string | null;
+  artifact_uri: string | null;
+  metadata_json: Record<string, unknown>;
+  created_by_id: string | null;
+  created_at: string;
+};
+
+export type FindingComment = {
+  id: string;
+  finding_id: string;
+  author_id: string | null;
+  body: string;
+  created_at: string;
+};
+
+export type FindingSuppression = {
+  id: string;
+  finding_id: string;
+  created_by_id: string | null;
+  reason: string;
+  status: string;
+  expires_at: string | null;
+  created_at: string;
+};
+
+export type RemediationHistory = {
+  id: string;
+  finding_id: string;
+  actor_id: string | null;
+  from_status: string | null;
+  to_status: string;
+  note: string | null;
+  metadata_json: Record<string, unknown>;
+  created_at: string;
+};
+
+export type FindingDetail = Finding & {
+  evidence: FindingEvidence[];
+  comments: FindingComment[];
+  suppressions: FindingSuppression[];
+  remediation_history: RemediationHistory[];
+};
+
 export type AuditEvent = {
   id: string;
   user_id: string | null;
@@ -91,10 +191,83 @@ export type AuditEvent = {
   created_at: string;
 };
 
+export type CredentialReference = {
+  id: string;
+  organization_id: string | null;
+  created_by_id: string | null;
+  name: string;
+  credential_type: string;
+  vault_provider: string;
+  vault_reference: string;
+  metadata_json: Record<string, unknown>;
+  created_at: string;
+};
+
+export type WebhookIntegration = {
+  id: string;
+  organization_id: string | null;
+  created_by_id: string | null;
+  name: string;
+  event_types: string[];
+  target_url: string;
+  secret_reference: string | null;
+  is_active: boolean;
+  created_at: string;
+};
+
+export type ToolInventory = {
+  id: string;
+  name: string;
+  category: string;
+  version: string | null;
+  status: string;
+  capabilities: string[];
+  last_checked_at: string | null;
+  metadata_json: Record<string, unknown>;
+  created_at: string;
+};
+
+export type AgentExecutionLog = {
+  id: string;
+  scan_id: string | null;
+  agent_name: string;
+  stage: string;
+  status: string;
+  message: string | null;
+  duration_ms: number | null;
+  metadata_json: Record<string, unknown>;
+  created_at: string;
+};
+
+export type ReportExport = {
+  id: string;
+  scan_id: string;
+  requested_by_id: string | null;
+  export_type: string;
+  status: string;
+  artifact_uri: string | null;
+  metadata_json: Record<string, unknown>;
+  created_at: string;
+};
+
 export type ScanCreateResponse = { scan: Scan; target: Target };
 
 export function authHeaders(token: string) {
   return { Authorization: `Bearer ${token}` };
+}
+
+export async function apiRequest<T>(token: string, path: string, options: RequestInit = {}): Promise<T> {
+  const r = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+  if (!r.ok) throw new Error(await readError(r));
+  if (r.status === 204) return undefined as T;
+  return (await r.json()) as T;
 }
 
 export function splitScope(value: string) {

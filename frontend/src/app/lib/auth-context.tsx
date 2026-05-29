@@ -4,22 +4,26 @@ import { createContext, useContext, useState, useEffect, ReactNode } from "react
 
 type AuthContextType = {
   token: string;
+  isLoaded: boolean;
   setToken: (t: string) => void;
   clearToken: () => void;
 };
 
 const AuthContext = createContext<AuthContextType>({
   token: "",
+  isLoaded: false,
   setToken: () => {},
   clearToken: () => {},
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setTokenState] = useState("");
+  const [isLoaded, setIsLoaded] = useState(false);
 
   useEffect(() => {
     const stored = window.localStorage.getItem("armorscan_token") || "";
     setTokenState(stored);
+    setIsLoaded(true);
   }, []);
 
   function setToken(t: string) {
@@ -33,7 +37,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ token, setToken, clearToken }}>
+    <AuthContext.Provider value={{ token, isLoaded, setToken, clearToken }}>
       {children}
     </AuthContext.Provider>
   );

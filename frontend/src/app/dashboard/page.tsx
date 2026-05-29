@@ -81,7 +81,7 @@ function SectionHeader({ eyebrow, title, action }: { eyebrow: string; title: str
 }
 
 export default function DashboardPage() {
-  const { token, clearToken } = useAuth();
+  const { token, isLoaded, clearToken } = useAuth();
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
   const [targets, setTargets] = useState<Target[]>([]);
@@ -90,6 +90,7 @@ export default function DashboardPage() {
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [error, setError] = useState("");
   const [isPending, startTransition] = useTransition();
+  const [isLoading, setIsLoading] = useState(true);
 
   const load = useCallback(async (tok = token) => {
     if (!tok) return;
@@ -106,9 +107,11 @@ export default function DashboardPage() {
       req<AuditEvent[]>("/audit/?limit=20"),
     ]);
     setUser(me); setTargets(t); setScans(s); setFindings(f); setAuditEvents(a);
+    setIsLoading(false);
   }, [token]);
 
   useEffect(() => {
+    if (!isLoaded) return;
     if (!token) { router.push("/login"); return; }
     startTransition(() => {
       load(token).catch((e: Error) => {
@@ -161,6 +164,8 @@ export default function DashboardPage() {
 
   // auth proof breakdown
   const unverifiedTargets = targets.filter(t => t.authorization_status !== "verified");
+
+  if (isLoading) return <main className="min-h-screen bg-[#04080f] px-4 py-6 sm:px-6"><div className="mx-auto max-w-[1600px] space-y-6"><div className="h-[80px] rounded-2xl bg-[#080f18] animate-pulse"></div><div className="grid grid-cols-4 gap-4"><div className="h-[120px] rounded-2xl bg-[#080f18] animate-pulse"></div><div className="h-[120px] rounded-2xl bg-[#080f18] animate-pulse"></div><div className="h-[120px] rounded-2xl bg-[#080f18] animate-pulse"></div><div className="h-[120px] rounded-2xl bg-[#080f18] animate-pulse"></div></div></div></main>;
 
   return (
     <main className="min-h-screen bg-[#04080f] px-4 py-6 sm:px-6">

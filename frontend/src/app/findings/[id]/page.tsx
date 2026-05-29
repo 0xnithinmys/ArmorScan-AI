@@ -67,16 +67,19 @@ function StatusHistoryItem({ status, label, timestamp, active }: {
 
 export default function FindingDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const { token } = useAuth();
+  const { token, isLoaded } = useAuth();
   const router = useRouter();
   const [finding, setFinding] = useState<Finding | null>(null);
   const [scan, setScan] = useState<Scan | null>(null);
   const [target, setTarget] = useState<Target | null>(null);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<"overview" | "evidence" | "remediation" | "history">("overview");
   const [fpReason, setFpReason] = useState("");
   const [showFpForm, setShowFpForm] = useState(false);
+  const [commentText, setCommentText] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
     const r = await fetch(`${API_BASE}${path}`, {
@@ -89,20 +92,20 @@ export default function FindingDetailPage() {
 
   const load = useCallback(async () => {
     if (!token || !id) return;
-    const [allFindings, allScans, allTargets] = await Promise.all([
-      apiFetch<Finding[]>("/findings/"),
-      apiFetch<Scan[]>("/scans/"),
-      apiFetch<Target[]>("/targets/"),
-    ]);
-    const f = allFindings.find(x => x.id === id);
-    if (!f) { setError("Finding not found"); return; }
-    setFinding(f);
-    const s = allScans.find(x => x.id === f.scan_id);
-    setScan(s || null);
-    setTarget(s ? allTargets.find(t => t.id === s.target_id) || null : null);
+    try {
+      const f = await apiFetch<any>(`/findings/${id}`);
+      setFinding(f);
+      if (f.scan) setScan(f.scan);
+      if (f.scan?.target) setTarget(f.scan.target);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Finding not found");
+    } finally {
+      setIsLoading(false);
+    }
   }, [token, id]);
 
   useEffect(() => {
+    if (!isLoaded) return;
     if (!token) { router.push("/login"); return; }
     load().catch(e => setError((e as Error).message));
   }, [token, load, router]);
@@ -116,17 +119,34 @@ export default function FindingDetailPage() {
   }
 
   async function markFalsePositive() {
-    setError(""); setMessage("");
+    setError(""); setMessage(""); setIsSubmitting(true);
     try {
-      await apiFetch<Finding>(`/findings/${id}/status`, { method: "PATCH", body: JSON.stringify({ status: "ignored", reason: fpReason }) });
+      await apiFetch<any>(`/findings/${id}/suppressions`, { method: "POST", body: JSON.stringify({ reason: fpReason }) });
       await load(); setMessage("Marked as false positive."); setShowFpForm(false);
     } catch (err) { setError((err as Error).message); }
+    finally { setIsSubmitting(false); }
   }
 
-  if (!finding) {
+  async function submitComment() {
+    if (!commentText.trim()) return;
+    setError(""); setMessage(""); setIsSubmitting(true);
+    try {
+      await apiFetch<any>(`/findings/${id}/comments`, { method: "POST", body: JSON.stringify({ body: commentText }) });
+      await load(); setMessage("Comment added."); setCommentText("");
+    } catch (err) { setError((err as Error).message); }
+    finally { setIsSubmitting(false); }
+  }
+
+  if (isLoading || !finding) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-[#04080f]">
-        <p className="font-mono text-sm text-white/30">{error || "Loading finding..."}</p>
+      <main className="min-h-screen bg-[#04080f] px-4 py-6 sm:px-6">
+        <div className="mx-auto max-w-[1400px] space-y-5">
+          <header className="rounded-2xl border border-white/7 bg-[#080f18] p-6 h-[140px] animate-pulse" />
+          <div className="grid gap-5 lg:grid-cols-[1.4fr_0.6fr]">
+            <div className="h-[400px] rounded-2xl border border-white/7 bg-[#080f18] animate-pulse" />
+            <div className="h-[600px] rounded-2xl border border-white/7 bg-[#080f18] animate-pulse" />
+          </div>
+        </div>
       </main>
     );
   }
@@ -197,7 +217,7 @@ export default function FindingDetailPage() {
           {showFpForm && (
             <div className="mt-3 flex flex-col gap-2 sm:flex-row">
               <input className="field flex-1" placeholder="Reason for false positive..." value={fpReason} onChange={e => setFpReason(e.target.value)} />
-              <GreenButton onClick={markFalsePositive}>Confirm FP</GreenButton>
+              <GreenButton isLoading={isSubmitting} disabled={isSubmitting || !fpReason.trim()} onClick={markFalsePositive}>Confirm FP</GreenButton>
               <GhostButton onClick={() => setShowFpForm(false)}>Cancel</GhostButton>
             </div>
           )}
@@ -391,8 +411,8 @@ export default function FindingDetailPage() {
 
             <div className="mt-6 rounded-xl border border-white/7 bg-[#05090f] p-4">
               <p className="mb-3 font-mono text-[10px] text-white/30 uppercase tracking-wider">Add comment</p>
-              <textarea rows={3} placeholder="Add a note, rationale, or suppression reason..." className="field w-full resize-none" />
-              <GreenButton className="mt-2">Save comment</GreenButton>
+              <textarea value={commentText} onChange={e => setCommentText(e.target.value)} rows={3} placeholder="Add a note, rationale, or suppression reason..." className="field w-full resize-none" />
+              <GreenButton isLoading={isSubmitting} disabled={isSubmitting || !commentText.trim()} onClick={submitComment} className="mt-2">Save comment</GreenButton>
             </div>
           </div>
         )}

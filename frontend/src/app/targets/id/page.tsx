@@ -64,7 +64,7 @@ function TimelineNode({ scan, target }: { scan: Scan; target: Target }) {
 
 export default function TargetDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const { token } = useAuth();
+  const { token, isLoaded } = useAuth();
   const router = useRouter();
   const [target, setTarget] = useState<Target | null>(null);
   const [scans, setScans] = useState<Scan[]>([]);
@@ -100,6 +100,7 @@ export default function TargetDetailPage() {
   }, [token, id]);
 
   useEffect(() => {
+    if (!isLoaded) return;
     if (!token) { router.push("/login"); return; }
     load().catch(e => setError((e as Error).message));
   }, [token, load, router]);

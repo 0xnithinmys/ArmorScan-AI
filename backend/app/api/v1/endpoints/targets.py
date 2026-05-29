@@ -100,6 +100,16 @@ async def create_target(
     return TargetRead.model_validate(target)
 
 
+@router.get("/{target_id}", response_model=TargetRead)
+async def get_target(
+    target_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    target = await _load_target_with_proofs(db, target_id=target_id, user=current_user)
+    return TargetRead.model_validate(target)
+
+
 @router.delete("/{target_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_target(
     target_id: str,

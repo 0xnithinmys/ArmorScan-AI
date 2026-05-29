@@ -5,21 +5,85 @@ import re
 import shutil
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from armorscan.policy import evaluate_agent_action
 from armorscan.tools.engine_common import EngineResult, ensure_repo_target, normalize_severity, run_json_command
 
 
 STATIC_PATTERNS = [
-    ("python-shell-true", re.compile(r"shell\s*=\s*True"), "high", "CWE-78", "Python subprocess uses shell=True"),
-    ("python-eval", re.compile(r"\beval\s*\("), "high", "CWE-95", "Python eval() executes dynamic code"),
-    ("python-exec", re.compile(r"\bexec\s*\("), "high", "CWE-95", "Python exec() executes dynamic code"),
-    ("python-pickle", re.compile(r"pickle\.loads?\s*\("), "medium", "CWE-502", "Pickle deserialization detected"),
-    ("python-yaml-load", re.compile(r"yaml\.load\s*\("), "medium", "CWE-502", "yaml.load() may deserialize unsafe data"),
-    ("tls-verify-false", re.compile(r"verify\s*=\s*False"), "medium", "CWE-295", "TLS certificate verification disabled"),
-    ("js-eval", re.compile(r"\beval\s*\("), "high", "CWE-95", "JavaScript eval() executes dynamic code"),
-    ("js-inner-html", re.compile(r"(innerHTML\s*=|dangerouslySetInnerHTML)"), "medium", "CWE-79", "Raw HTML injection sink detected"),
-    ("hardcoded-secret", re.compile(r"(?i)(api[_-]?key|secret|password|token)\s*=\s*['\"][^'\"]{8,}['\"]"), "medium", "CWE-798", "Possible hardcoded secret"),
+    (
+        "python-shell-true",
+        {".py"},
+        re.compile(r"shell\s*=\s*True"),
+        "high",
+        "CWE-78",
+        "Python subprocess uses shell=True",
+    ),
+    (
+        "python-eval",
+        {".py"},
+        re.compile(r"\beval\s*\("),
+        "high",
+        "CWE-95",
+        "Python eval() executes dynamic code",
+    ),
+    (
+        "python-exec",
+        {".py"},
+        re.compile(r"\bexec\s*\("),
+        "high",
+        "CWE-95",
+        "Python exec() executes dynamic code",
+    ),
+    (
+        "python-pickle",
+        {".py"},
+        re.compile(r"pickle\.loads?\s*\("),
+        "medium",
+        "CWE-502",
+        "Pickle deserialization detected",
+    ),
+    (
+        "python-yaml-load",
+        {".py"},
+        re.compile(r"yaml\.load\s*\("),
+        "medium",
+        "CWE-502",
+        "yaml.load() may deserialize unsafe data",
+    ),
+    (
+        "tls-verify-false",
+        {".py", ".js", ".jsx", ".ts", ".tsx"},
+        re.compile(r"verify\s*=\s*False"),
+        "medium",
+        "CWE-295",
+        "TLS certificate verification disabled",
+    ),
+    (
+        "js-eval",
+        {".js", ".jsx", ".ts", ".tsx"},
+        re.compile(r"\beval\s*\("),
+        "high",
+        "CWE-95",
+        "JavaScript eval() executes dynamic code",
+    ),
+    (
+        "js-inner-html",
+        {".js", ".jsx", ".ts", ".tsx"},
+        re.compile(r"(innerHTML\s*=|dangerouslySetInnerHTML)"),
+        "medium",
+        "CWE-79",
+        "Raw HTML injection sink detected",
+    ),
+    (
+        "hardcoded-secret",
+        {".py", ".js", ".jsx", ".ts", ".tsx"},
+        re.compile(r"(?i)(api[_-]?key|secret|password|token)\s*=\s*['\"][^'\"]{8,}['\"]"),
+        "medium",
+        "CWE-798",
+        "Possible hardcoded secret",
+    ),
 ]
 SOURCE_EXTENSIONS = {".py", ".js", ".jsx", ".ts", ".tsx"}
 
@@ -28,7 +92,21 @@ def _line_for_offset(text: str, offset: int) -> int:
     return text.count("\n", 0, offset) + 1
 
 
-def _static_fallback(repo_path: Path, *, engine: str) -> list[dict[str, Any]]:
+def _github_blob_location(target: str, rel: Path | str, line: int | str | None = None) -> str:
+    parsed = urlparse(target)
+    if parsed.netloc.lower() != "github.com":
+        suffix = f":{line}" if line else ""
+        return f"{rel}{suffix}"
+    repo_path = parsed.path.strip("/").removesuffix(".git")
+    if repo_path.count("/") < 1:
+        suffix = f":{line}" if line else ""
+        return f"{rel}{suffix}"
+    rel_path = str(rel).replace("\\", "/")
+    location = f"https://github.com/{repo_path}/blob/main/{rel_path}"
+    return f"{location}#L{line}" if line else location
+
+
+def _static_fallback(repo_path: Path, *, engine: str, target: str) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
     for file_path in repo_path.rglob("*"):
         if not file_path.is_file() or file_path.suffix.lower() not in SOURCE_EXTENSIONS:
@@ -39,7 +117,9 @@ def _static_fallback(repo_path: Path, *, engine: str) -> list[dict[str, Any]]:
             text = file_path.read_text(encoding="utf-8", errors="ignore")
         except OSError:
             continue
-        for pattern_id, pattern, severity, cwe_id, title in STATIC_PATTERNS:
+        for pattern_id, extensions, pattern, severity, cwe_id, title in STATIC_PATTERNS:
+            if file_path.suffix.lower() not in extensions:
+                continue
             for match in pattern.finditer(text):
                 line = _line_for_offset(text, match.start())
                 rel = file_path.relative_to(repo_path)
@@ -49,7 +129,7 @@ def _static_fallback(repo_path: Path, *, engine: str) -> list[dict[str, Any]]:
                         "title": title,
                         "severity": severity,
                         "cwe_id": cwe_id,
-                        "location": f"{rel}:{line}",
+                        "location": _github_blob_location(target, rel, line),
                         "parameter": None,
                         "payload": None,
                         "evidence": match.group(0)[:300],
@@ -66,14 +146,14 @@ def _static_fallback(repo_path: Path, *, engine: str) -> list[dict[str, Any]]:
     return findings[:50]
 
 
-def _normalize_semgrep(row: dict[str, Any], repo_path: Path) -> dict[str, Any]:
+def _normalize_semgrep(row: dict[str, Any], repo_path: Path, target: str) -> dict[str, Any]:
     extra = row.get("extra") or {}
     metadata = extra.get("metadata") or {}
     semgrep_severity = str(extra.get("severity") or metadata.get("impact") or "medium").lower()
     severity = {"error": "high", "warning": "medium"}.get(semgrep_severity, normalize_severity(semgrep_severity))
     path = row.get("path") or "unknown"
     start = (row.get("start") or {}).get("line")
-    location = f"{path}:{start}" if start else path
+    location = _github_blob_location(target, path, start)
     return {
         "id": f"semgrep-{row.get('check_id', 'rule')}",
         "title": extra.get("message") or row.get("check_id") or "Semgrep finding",
@@ -94,9 +174,14 @@ def _normalize_semgrep(row: dict[str, Any], repo_path: Path) -> dict[str, Any]:
     }
 
 
-def _normalize_bandit(row: dict[str, Any], repo_path: Path) -> dict[str, Any]:
+def _normalize_bandit(row: dict[str, Any], repo_path: Path, target: str) -> dict[str, Any]:
     severity = normalize_severity(row.get("issue_severity"))
-    location = f"{row.get('filename', 'unknown')}:{row.get('line_number', '')}".rstrip(":")
+    raw_path = Path(str(row.get("filename") or "unknown"))
+    try:
+        rel_path = raw_path.relative_to(repo_path)
+    except ValueError:
+        rel_path = raw_path
+    location = _github_blob_location(target, rel_path, row.get("line_number"))
     return {
         "id": f"bandit-{row.get('test_id', 'test')}-{row.get('line_number', '0')}",
         "title": row.get("test_name") or "Bandit finding",
@@ -117,10 +202,10 @@ def _normalize_bandit(row: dict[str, Any], repo_path: Path) -> dict[str, Any]:
     }
 
 
-def _normalize_gitleaks(row: dict[str, Any], repo_path: Path) -> dict[str, Any]:
+def _normalize_gitleaks(row: dict[str, Any], repo_path: Path, target: str) -> dict[str, Any]:
     rel = row.get("File") or row.get("file") or "unknown"
     line = row.get("StartLine") or row.get("start_line")
-    location = f"{rel}:{line}" if line else str(rel)
+    location = _github_blob_location(target, rel, line)
     secret_type = row.get("RuleID") or row.get("Description") or "Potential secret"
     return {
         "id": f"gitleaks-{secret_type}-{line or 0}",
@@ -261,7 +346,7 @@ async def _run_sast_scan(
     binary = shutil.which(engine)
     if not binary:
         if engine in {"semgrep", "bandit"}:
-            result.findings.extend(_static_fallback(repo_path, engine=engine))
+            result.findings.extend(_static_fallback(repo_path, engine=engine, target=target))
             result.errors.append(f"{engine} CLI is not installed or not on PATH; used fallback static rules")
         else:
             result.errors.append(f"{engine} CLI is not installed or not on PATH")
@@ -286,7 +371,7 @@ async def _run_sast_scan(
             )
             data = json.loads(stdout or "{}")
             rows = data.get("results", [])
-            result.findings.extend(_normalize_semgrep(row, repo_path) for row in rows)
+            result.findings.extend(_normalize_semgrep(row, repo_path, target) for row in rows)
         elif engine == "bandit":
             code, stdout, stderr = await run_json_command(
                 [binary, "-r", str(repo_path), "-f", "json"],
@@ -294,7 +379,7 @@ async def _run_sast_scan(
             )
             data = json.loads(stdout or "{}")
             rows = data.get("results", [])
-            result.findings.extend(_normalize_bandit(row, repo_path) for row in rows)
+            result.findings.extend(_normalize_bandit(row, repo_path, target) for row in rows)
         elif engine == "gitleaks":
             code, stdout, stderr = await run_json_command(
                 [binary, "detect", "--no-git", "--source", str(repo_path), "--report-format", "json", "--report-path", "-"],
@@ -302,7 +387,7 @@ async def _run_sast_scan(
             )
             rows = json.loads(stdout or "[]")
             if isinstance(rows, list):
-                result.findings.extend(_normalize_gitleaks(row, repo_path) for row in rows)
+                result.findings.extend(_normalize_gitleaks(row, repo_path, target) for row in rows)
         else:
             code, stdout, stderr = await run_json_command(
                 [binary, "fs", "--scanners", "vuln,secret,misconfig", "--format", "json", str(repo_path)],

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from typing import Any
 
 
@@ -23,11 +24,63 @@ def clamp_confidence(value: Any) -> int:
 
 
 def finding_fingerprint(finding: dict[str, Any]) -> str:
+    location = _canonical_location(str(finding.get("location") or ""))
+    weakness = _weakness_key(finding)
     raw = "|".join(
-        str(finding.get(key) or "").strip().lower()
-        for key in ("title", "location", "parameter", "payload", "source")
+        [
+            weakness,
+            location,
+            str(finding.get("parameter") or "").strip().lower(),
+            str(finding.get("payload") or "").strip().lower(),
+        ]
     )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _canonical_location(location: str) -> str:
+    value = location.replace("\\", "/").strip()
+    value = re.sub(r"https://github\.com/[^/]+/[^/]+/blob/[^/]+/", "", value)
+    value = re.sub(r"#L(\d+)$", r":\1", value)
+    value = re.sub(r":+", ":", value)
+    return value.lower()
+
+
+def _weakness_key(finding: dict[str, Any]) -> str:
+    text = " ".join(
+        str(finding.get(key) or "")
+        for key in ("id", "title", "summary", "evidence", "cwe_id")
+    ).lower()
+    if "eval" in text:
+        return "dynamic-code-eval"
+    if "exec" in text:
+        return "dynamic-code-exec"
+    if "shell=true" in text or "shell = true" in text or "cwe-78" in text:
+        return "os-command-shell"
+    if "secret" in text or "api_key" in text or "token" in text or "cwe-798" in text:
+        return "hardcoded-secret"
+    if "pickle" in text or "yaml.load" in text or "cwe-502" in text:
+        return "unsafe-deserialization"
+    return str(finding.get("cwe_id") or finding.get("title") or "finding").strip().lower()
+
+
+def _merge_findings(current: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    severity_rank = {"critical": 5, "high": 4, "medium": 3, "low": 2, "info": 1}
+    primary = incoming if (
+        severity_rank[incoming["severity"]] > severity_rank[current["severity"]]
+        or incoming["confidence"] > current["confidence"]
+    ) else current
+    secondary = current if primary is incoming else incoming
+    merged = dict(primary)
+    sources = set(primary.get("correlated_sources") or [primary.get("source") or "agent"])
+    sources.update(secondary.get("correlated_sources") or [secondary.get("source") or "agent"])
+    evidence = [item for item in [primary.get("evidence"), secondary.get("evidence")] if item]
+    steps = list(dict.fromkeys((primary.get("reproduction_steps") or []) + (secondary.get("reproduction_steps") or [])))
+    merged["correlated_sources"] = sorted(str(source) for source in sources if source)
+    if evidence:
+        merged["evidence"] = "\n\n".join(dict.fromkeys(str(item) for item in evidence))[:2000]
+    merged["reproduction_steps"] = steps[:8]
+    merged["confidence"] = max(primary["confidence"], secondary["confidence"])
+    return merged
 
 
 def normalize_finding(finding: dict[str, Any], *, default_source: str = "agent") -> dict[str, Any]:
@@ -59,8 +112,10 @@ def dedupe_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for item in findings:
         finding = normalize_finding(item)
         current = by_fingerprint.get(finding["fingerprint"])
-        if current is None or finding["confidence"] > current["confidence"]:
+        if current is None:
             by_fingerprint[finding["fingerprint"]] = finding
+        else:
+            by_fingerprint[finding["fingerprint"]] = _merge_findings(current, finding)
     return sorted(
         by_fingerprint.values(),
         key=lambda finding: (

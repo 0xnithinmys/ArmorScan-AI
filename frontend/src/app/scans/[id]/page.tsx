@@ -6,10 +6,10 @@ import Link from "next/link";
 import { useAuth } from "../../lib/auth-context";
 import {
   API_BASE, authHeaders, readError,
-  Target, Scan, Finding,
+  Target, Scan, Finding, ScanArtifact,
   shortId, statusStyle, severityStyle,
 } from "../../lib/api";
-import { StatusBadge, SeverityBadge, GreenButton, GhostButton, EmptyState } from "../../components/ui";
+import { StatusBadge, SeverityBadge, GreenButton, GhostButton, EmptyState, PageLoader } from "../../components/ui";
 
 const LIVE_STATUSES = new Set(["queued", "planning", "executing", "observing", "reflecting"]);
 
@@ -124,11 +124,13 @@ function TraceNode({ node, index }: { node: Record<string, unknown>; index: numb
 
 export default function ScanDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const { token } = useAuth();
+  const { token, isLoaded } = useAuth();
   const router = useRouter();
   const [scan, setScan] = useState<Scan | null>(null);
   const [target, setTarget] = useState<Target | null>(null);
   const [findings, setFindings] = useState<Finding[]>([]);
+  const [artifacts, setArtifacts] = useState<ScanArtifact[]>([]);
+  const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [activeTab, setActiveTab] = useState<"timeline" | "engines" | "findings" | "evidence" | "policy">("timeline");
@@ -146,20 +148,21 @@ export default function ScanDetailPage() {
 
   const load = useCallback(async () => {
     if (!token || !id) return;
-    const [allScans, allTargets, allFindings] = await Promise.all([
-      apiFetch<Scan[]>("/scans/"),
-      apiFetch<Target[]>("/targets/"),
-      apiFetch<Finding[]>("/findings/"),
+    const s = await apiFetch<Scan>(`/scans/${id}`);
+    const [t, f, a] = await Promise.all([
+      apiFetch<Target>(`/targets/${s.target_id}`),
+      apiFetch<Finding[]>(`/scans/${id}/findings`),
+      apiFetch<ScanArtifact[]>(`/scans/${id}/artifacts`),
     ]);
-    const s = allScans.find(x => x.id === id);
-    if (!s) { setError("Scan not found"); return; }
     setScan(s);
-    setTarget(allTargets.find(t => t.id === s.target_id) || null);
-    setFindings(allFindings.filter(f => f.scan_id === id));
+    setTarget(t);
+    setFindings(f);
+    setArtifacts(a);
   }, [token, id]);
 
   // auto-poll while live
   useEffect(() => {
+    if (!isLoaded) return;
     if (!token) { router.push("/login"); return; }
     load().catch(e => setError((e as Error).message));
   }, [token, load, router]);
@@ -180,12 +183,39 @@ export default function ScanDetailPage() {
     } catch (err) { setError((err as Error).message); }
   }
 
+  async function lifecycle(action: "pause" | "resume" | "duplicate" | "retry") {
+    setError(""); setMessage(""); setBusy(action);
+    try {
+      const result = await apiFetch<Scan>(`/scans/${id}/${action}`, {
+        method: "POST",
+        body: JSON.stringify({ reason: `Requested from scan detail page` }),
+      });
+      await load();
+      setMessage(action === "duplicate" || action === "retry" ? `Queued scan ${shortId(result.id)}.` : `Scan ${action} requested.`);
+    } catch (err) { setError((err as Error).message); }
+    finally { setBusy(""); }
+  }
+
+  async function createArtifact() {
+    setError(""); setMessage(""); setBusy("artifact");
+    try {
+      await apiFetch<ScanArtifact>(`/scans/${id}/artifacts`, {
+        method: "POST",
+        body: JSON.stringify({
+          artifact_type: "operator_note",
+          name: `Operator note ${new Date().toLocaleString()}`,
+          content_type: "text/plain",
+          metadata_json: { note: "Created from frontend scan detail page" },
+        }),
+      });
+      await load();
+      setMessage("Scan artifact created.");
+    } catch (err) { setError((err as Error).message); }
+    finally { setBusy(""); }
+  }
+
   if (!scan) {
-    return (
-      <main className="flex min-h-screen items-center justify-center bg-[#04080f]">
-        <p className="font-mono text-sm text-white/30">{error || "Loading scan..."}</p>
-      </main>
-    );
+    return <PageLoader text={error || "Loading scan detail..."} />;
   }
 
   const isLive = LIVE_STATUSES.has(scan.status);

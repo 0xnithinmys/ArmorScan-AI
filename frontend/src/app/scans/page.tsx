@@ -11,7 +11,7 @@ import { Panel, EmptyState, StatusBadge, GreenButton, GhostButton } from "../com
 const empty = { target_id: "", target_name: "", target_url: "", scan_type: "url", scope: "", authorization_attestation: true };
  
 export default function ScansPage() {
-  const { token } = useAuth();
+  const { token, isLoaded } = useAuth();
   const [targets, setTargets] = useState<Target[]>([]);
   const [scans, setScans] = useState<Scan[]>([]);
   const [selectedId, setSelectedId] = useState("");
@@ -19,6 +19,9 @@ export default function ScansPage() {
   const [form, setForm] = useState(empty);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
+  const [isCreating, setIsCreating] = useState(false);
+  const [cancellingIds, setCancellingIds] = useState<Set<string>>(new Set());
  
   async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
     const r = await fetch(`${API_BASE}${path}`, {
@@ -31,14 +34,19 @@ export default function ScansPage() {
   }
  
   const load = useCallback(async () => {
-    if (!token) return;
-    const [t, s] = await Promise.all([
-      apiFetch<Target[]>("/targets/"),
-      apiFetch<Scan[]>("/scans/"),
-    ]);
-    setTargets(t); setScans(s);
-    setSelectedId(prev => prev || s[0]?.id || "");
-  }, [token]);
+    if (!isLoaded) return;
+    if (!token) { setIsLoading(false); return; }
+    try {
+      const [t, s] = await Promise.all([
+        apiFetch<Target[]>("/targets/"),
+        apiFetch<Scan[]>("/scans/"),
+      ]);
+      setTargets(t); setScans(s);
+      setSelectedId(prev => prev || s[0]?.id || "");
+    } finally {
+      setIsLoading(false);
+    }
+  }, [token, isLoaded]);
  
   useEffect(() => { load().catch(e => setError(e.message)); }, [load]);
 
@@ -59,7 +67,7 @@ export default function ScansPage() {
   }, [selectedId, token]);
  
   async function createScan(e: FormEvent) {
-    e.preventDefault(); setError("");
+    e.preventDefault(); setError(""); setIsCreating(true);
     try {
       const payload = form.target_id === "__new__"
         ? { target_name: form.target_name, target_url: form.target_url, scan_type: form.scan_type, scope: form.scope.split(",").map(s => s.trim()).filter(Boolean), authorization_attestation: form.authorization_attestation }
@@ -68,19 +76,35 @@ export default function ScansPage() {
       setSelectedId(res.scan.id); setForm(empty); await load();
       setMessage("Scan queued. Worker will pick it up if Redis/Celery is online.");
     } catch (err) { setError(err instanceof Error ? err.message : "Failed"); }
+    finally { setIsCreating(false); }
   }
  
   async function cancelScan(id: string) {
-    setError("");
+    setError(""); setCancellingIds(prev => new Set(prev).add(id));
     try {
       await apiFetch<Scan>(`/scans/${id}/cancel`, { method: "POST" });
       await load(); setMessage("Scan cancelled.");
     } catch (err) { setError(err instanceof Error ? err.message : "Failed"); }
+    finally { setCancellingIds(prev => { const n = new Set(prev); n.delete(id); return n; }); }
   }
  
   const liveStatuses = new Set(["queued", "planning", "executing", "observing", "reflecting"]);
   const selected = scans.find(s => s.id === selectedId);
- 
+
+  if (isLoading) {
+    return (
+      <main className="min-h-screen bg-[#04080f] px-4 py-6 sm:px-6">
+        <div className="mx-auto max-w-[1400px] space-y-5">
+          <header className="rounded-2xl border border-white/7 bg-[#080f18] p-6 h-[140px] animate-pulse" />
+          <div className="grid gap-5 lg:grid-cols-[380px_1fr]">
+            <div className="h-[400px] rounded-2xl border border-white/7 bg-[#080f18] animate-pulse" />
+            <div className="h-[600px] rounded-2xl border border-white/7 bg-[#080f18] animate-pulse" />
+          </div>
+        </div>
+      </main>
+    );
+  }
+
   return (
     <main className="min-h-screen bg-[#04080f] px-4 py-6 sm:px-6">
       <div className="mx-auto max-w-[1400px] space-y-5">

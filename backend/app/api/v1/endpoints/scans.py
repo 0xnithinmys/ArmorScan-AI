@@ -12,6 +12,7 @@ from app.api.v1.schemas import (
     ScanArtifactCreateRequest,
     ScanArtifactRead,
     ScanCreateRequest,
+    ScanCreateResponse,
     ScanLifecycleRequest,
     ScanRead,
     TargetRead,
@@ -52,7 +53,7 @@ async def list_scans(
     return [ScanRead.model_validate(scan) for scan in result.scalars().all()]
 
 
-@router.post("/", status_code=status.HTTP_201_CREATED)
+@router.post("/", response_model=ScanCreateResponse, status_code=status.HTTP_201_CREATED)
 async def initiate_scan(
     payload: ScanCreateRequest,
     db: AsyncSession = Depends(get_db),

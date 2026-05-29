@@ -96,6 +96,12 @@ def _exploitability_modifier(finding: dict[str, Any]) -> int:
 
 def remediation_for(finding: dict[str, Any]) -> str:
     text = _text_for(finding)
+    if "eval" in text or "exec()" in text or "dynamic code" in text:
+        return (
+            "Remove dynamic code execution. Replace eval/exec with a constrained parser, "
+            "lookup table, or schema-validated command map; if unavoidable, only evaluate trusted "
+            "constants in a sandboxed path with explicit allowlists."
+        )
     if "xss" in text or "cwe-79" in text or "innerhtml" in text:
         return "Encode untrusted output, prefer safe DOM APIs, and enforce a strict Content Security Policy."
     if "shell" in text or "command" in text or "cwe-78" in text:
@@ -134,6 +140,9 @@ def score_finding(finding: dict[str, Any]) -> dict[str, Any]:
                 "context_modifier": context_modifier,
                 "exploitability_modifier": exploitability_modifier,
                 "source_modifier": source_modifier,
+                "source": finding.get("source"),
+                "correlated_sources": finding.get("correlated_sources", []),
+                "validation_state": finding.get("validation_state"),
             },
             "business_impact": business_impact_for(rating),
             "remediation": scored_remediation(finding),
@@ -245,12 +254,16 @@ def render_markdown_report(report: dict[str, Any]) -> str:
         "## Prioritized Findings",
     ]
     for finding in report["findings"]:
+        risk_factors = finding.get("risk_factors") or {}
+        sources = risk_factors.get("correlated_sources") or [risk_factors.get("source") or finding.get("source")]
+        source_text = ", ".join(str(source) for source in sources if source)
         lines.extend(
             [
                 "",
                 f"### {finding.get('title')}",
                 f"- Risk: {finding.get('risk_rating')} ({finding.get('risk_score')}/100)",
                 f"- Severity: {finding.get('severity')} | Confidence: {finding.get('confidence')}%",
+                f"- Sources: {source_text or 'agent'}",
                 f"- Location: {finding.get('location')}",
                 f"- OWASP: {finding.get('owasp_category') or 'unmapped'}",
                 f"- Impact: {finding.get('business_impact')}",
@@ -266,8 +279,27 @@ def render_pdf_report(report: dict[str, Any]) -> bytes:
     for raw_line in text.replace("#", "").splitlines():
         line = raw_line.strip()
         if line:
-            lines.append(line[:96])
+            lines.extend(_wrap_report_line(line, width=92))
     return _simple_pdf(lines[:45])
+
+
+def _wrap_report_line(line: str, *, width: int) -> list[str]:
+    if len(line) <= width:
+        return [line]
+    words = line.split()
+    wrapped: list[str] = []
+    current = ""
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        if len(candidate) <= width:
+            current = candidate
+            continue
+        if current:
+            wrapped.append(current)
+        current = word[:width]
+    if current:
+        wrapped.append(current)
+    return wrapped
 
 
 def _pdf_escape(value: str) -> str:

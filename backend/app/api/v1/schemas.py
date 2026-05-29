@@ -164,6 +164,11 @@ class ScanRead(BaseModel):
     completed_at: datetime | None
 
 
+class ScanCreateResponse(BaseModel):
+    scan: ScanRead
+    target: TargetRead
+
+
 class ScanLifecycleRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=500)
 

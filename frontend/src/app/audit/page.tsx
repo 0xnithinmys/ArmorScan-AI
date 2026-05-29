@@ -6,7 +6,7 @@ import { API_BASE, authHeaders, readError, AuditEvent, Scan, shortId } from "../
 import { Panel, EmptyState } from "../components/ui";
 
 export default function AuditPage() {
-  const { token } = useAuth();
+  const { token, isLoaded } = useAuth();
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [scans, setScans] = useState<Scan[]>([]);
   const [selectedScanId, setSelectedScanId] = useState("");
@@ -26,7 +26,7 @@ export default function AuditPage() {
     setSelectedScanId(prev => prev || s[0]?.id || "");
   }, [token]);
 
-  useEffect(() => { load().catch(e => setError(e.message)); }, [load]);
+  useEffect(() => { if (!isLoaded) return; load().catch(e => setError(e.message)); }, [load, isLoaded]);
 
   const selectedScan = scans.find(s => s.id === selectedScanId);
 
