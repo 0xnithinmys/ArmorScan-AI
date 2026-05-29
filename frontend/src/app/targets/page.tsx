@@ -1,27 +1,25 @@
 "use client";
- 
+
 import { FormEvent, useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { useAuth } from "../lib/auth-context";
 import {
   API_BASE, authHeaders, readError,
-  AuthorizationProof, Target, shortId,
+  Target, shortId,
 } from "../lib/api";
 import {
   Panel, EmptyState, StatusBadge, GreenButton, GhostButton,
 } from "../components/ui";
- 
+
 const empty = { name: "", target_type: "url", target_url: "", scope: "", authorization_attestation: true };
-type ProofType = "manual_attestation" | "dns_txt" | "http_file" | "meta_tag" | "github_file";
- 
+
 export default function TargetsPage() {
   const { token } = useAuth();
   const [targets, setTargets] = useState<Target[]>([]);
   const [form, setForm] = useState(empty);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
-  const [proofTypes, setProofTypes] = useState<Record<string, ProofType>>({});
-  const [proofNotes, setProofNotes] = useState<Record<string, string>>({});
- 
+
   async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
     const r = await fetch(`${API_BASE}${path}`, {
       ...options,
@@ -35,15 +33,15 @@ export default function TargetsPage() {
     if (r.status === 204) return undefined as T;
     return (await r.json()) as T;
   }
- 
+
   const load = useCallback(async () => {
     if (!token) return;
     const data = await apiFetch<Target[]>("/targets/");
     setTargets(data);
   }, [token]);
- 
+
   useEffect(() => { load().catch(e => setError(e.message)); }, [load]);
- 
+
   async function createTarget(e: FormEvent) {
     e.preventDefault(); setError("");
     try {
@@ -55,47 +53,18 @@ export default function TargetsPage() {
       setMessage("Target created.");
     } catch (err) { setError(err instanceof Error ? err.message : "Failed"); }
   }
- 
-  async function issueChallenge(id: string) {
+
+  async function authorizeTarget(id: string) {
     setError("");
     try {
-      const proofType = proofTypes[id] ?? "dns_txt";
-      const proof = await apiFetch<AuthorizationProof>(`/targets/${id}/proofs/challenge`, {
+      await apiFetch<Target>(`/targets/${id}/authorize`, {
         method: "POST",
-        body: JSON.stringify({ proof_type: proofType }),
+        body: JSON.stringify({ proof_type: "manual_attestation", proof: "I_AM_AUTHORIZED" }),
       });
-      const note = proof.instructions
-        ? `${proof.instructions} Challenge token: ${proof.challenge_token}`
-        : `Challenge issued for ${proof.proof_type}.`;
-      setProofNotes(current => ({ ...current, [id]: note }));
-      setMessage(`Challenge issued for ${proof.proof_type}.`);
+      await load(); setMessage("Target authorized.");
     } catch (err) { setError(err instanceof Error ? err.message : "Failed"); }
   }
 
-  async function verifyTarget(id: string) {
-    setError("");
-    try {
-      const proofType = proofTypes[id] ?? "dns_txt";
-      let proof: string | undefined;
-      if (proofType === "manual_attestation") {
-        proof = "I_AM_AUTHORIZED";
-      } else if (proofType === "github_file") {
-        proof = window.prompt("Paste the raw GitHub verification file URL:", "") || undefined;
-        if (!proof) return;
-      }
-      const target = await apiFetch<Target>(`/targets/${id}/authorize`, {
-        method: "POST",
-        body: JSON.stringify({ proof_type: proofType, ...(proof ? { proof } : {}) }),
-      });
-      await load();
-      setMessage(
-        target.authorization_status === "verified"
-          ? "Target verification succeeded."
-          : "Manual attestation recorded. Real verification is still required before scans run."
-      );
-    } catch (err) { setError(err instanceof Error ? err.message : "Failed"); }
-  }
- 
   async function deleteTarget(id: string) {
     setError("");
     try {
@@ -103,7 +72,7 @@ export default function TargetsPage() {
       await load(); setMessage("Target deleted.");
     } catch (err) { setError(err instanceof Error ? err.message : "Failed"); }
   }
- 
+
   return (
     <main className="min-h-screen bg-[#04080f] px-4 py-6 sm:px-6">
       <div className="mx-auto max-w-[1400px] space-y-5">
@@ -118,14 +87,14 @@ export default function TargetsPage() {
             </div>
           )}
         </header>
- 
+
         <div className="grid gap-5 lg:grid-cols-[380px_1fr]">
           {/* Create form */}
           <form onSubmit={createTarget} className="rounded-2xl border border-white/7 bg-[#080f18] p-5 h-fit">
             <p className="font-mono text-[10px] uppercase tracking-[0.35em] text-[#a8ff3e]/60">POST /targets</p>
             <h2 className="mt-2 font-mono text-lg font-semibold text-white">Create target</h2>
             <div className="mt-5 space-y-3">
-              <input className="field" placeholder="Target name (optional)" value={form.name}
+              <input className="field" placeholder="Target name" value={form.name}
                 onChange={e => setForm({ ...form, name: e.target.value })} />
               <select className="field" value={form.target_type}
                 onChange={e => setForm({ ...form, target_type: e.target.value })}>
@@ -141,7 +110,7 @@ export default function TargetsPage() {
                 <input type="checkbox" checked={form.authorization_attestation}
                   onChange={e => setForm({ ...form, authorization_attestation: e.target.checked })}
                   className="accent-[#a8ff3e]" />
-                <span className="font-mono text-xs text-white/55">Record manual attestation only. Full verification is still required before scans can run.</span>
+                <span className="font-mono text-xs text-white/55">I attest I am authorized to scan this target.</span>
               </label>
               {token ? (
                 <GreenButton type="submit" className="w-full justify-center">
@@ -160,7 +129,7 @@ export default function TargetsPage() {
               )}
             </div>
           </form>
- 
+
           {/* Targets list */}
           <Panel title="Registered targets" eyebrow={`GET /targets · ${targets.length} total`}>
             {targets.length === 0 ? (
@@ -168,11 +137,11 @@ export default function TargetsPage() {
             ) : (
               <div className="space-y-3">
                 {targets.map(target => (
-                  <article key={target.id} className="rounded-xl border border-white/7 bg-[#05090f] p-4">
+                  <article key={target.id} className="group rounded-xl border border-white/7 bg-[#05090f] p-4 transition hover:border-white/12 hover:bg-[#0b1520]">
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                      <div className="min-w-0 flex-1">
+                      <Link href={`/targets/${target.id}`} className="min-w-0 flex-1">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <p className="font-mono text-sm font-semibold text-white">{target.name}</p>
+                          <p className="font-mono text-sm font-semibold text-white group-hover:text-[#a8ff3e] transition">{target.name}</p>
                           <span className="rounded-full border border-white/8 bg-white/4 px-2 py-0.5 font-mono text-[10px] uppercase text-white/35">{target.target_type}</span>
                         </div>
                         <p className="mt-1 truncate font-mono text-xs text-white/40">{target.target_url}</p>
@@ -184,38 +153,17 @@ export default function TargetsPage() {
                             ))}
                           </div>
                         )}
-                      </div>
+                      </Link>
                       <div className="flex items-center gap-2 flex-shrink-0">
                         <StatusBadge value={target.authorization_status} />
                         {target.authorization_status !== "verified" && (
-                          <>
-                            <select
-                              className="field min-w-[140px] py-1.5 text-xs"
-                              value={proofTypes[target.id] ?? (target.target_type === "github" ? "github_file" : "dns_txt")}
-                              onChange={e => setProofTypes(current => ({ ...current, [target.id]: e.target.value as ProofType }))}
-                            >
-                              <option value="dns_txt">DNS TXT</option>
-                              <option value="http_file">HTTP file</option>
-                              <option value="meta_tag">Meta tag</option>
-                              {target.target_type === "github" && <option value="github_file">GitHub file</option>}
-                              <option value="manual_attestation">Manual attest</option>
-                            </select>
-                            {((proofTypes[target.id] ?? (target.target_type === "github" ? "github_file" : "dns_txt")) !== "manual_attestation") && (
-                              <GhostButton onClick={() => issueChallenge(target.id)}>Issue challenge</GhostButton>
-                            )}
-                            <GreenButton onClick={() => verifyTarget(target.id)} className="py-1.5 px-3 text-xs">
-                              Verify
-                            </GreenButton>
-                          </>
+                          <GreenButton onClick={() => authorizeTarget(target.id)} className="py-1.5 px-3 text-xs">
+                            Authorize
+                          </GreenButton>
                         )}
                         <GhostButton onClick={() => deleteTarget(target.id)}>Delete</GhostButton>
                       </div>
                     </div>
-                    {proofNotes[target.id] && (
-                      <p className="mt-3 rounded-lg border border-white/7 bg-[#08101a] px-3 py-2 font-mono text-[10px] leading-5 text-white/55">
-                        {proofNotes[target.id]}
-                      </p>
-                    )}
                   </article>
                 ))}
               </div>
@@ -226,4 +174,3 @@ export default function TargetsPage() {
     </main>
   );
 }
- 
