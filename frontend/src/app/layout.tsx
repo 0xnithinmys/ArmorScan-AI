@@ -4,7 +4,7 @@ import { IBM_Plex_Mono, Libre_Baskerville } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "./lib/auth-context";
 import Navbar from "./components/navbar";
-import { ScanlineOverlay } from "./components/ui";
+import { ScanlineOverlay } from "./components/scanline-overlay";
 
 const mono = IBM_Plex_Mono({
   subsets: ["latin"],

@@ -175,23 +175,6 @@ export function GhostButton({
   );
 }
 
-export function ScanlineOverlay() {
-  return (
-    <div
-      className="pointer-events-none fixed inset-0 z-50 opacity-[0.025]"
-      style={{
-        backgroundImage:
-          "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.5) 2px, rgba(255,255,255,0.5) 3px)",
-        backgroundSize: "100% 3px",
-        willChange: "transform",
-        contain: "strict",
-        contentVisibility: "auto",
-      }}
-      aria-hidden="true"
-    />
-  );
-}
-
 export function LoadingState({ text = "Loading data..." }: { text?: string }) {
   return (
     <div className="rounded-xl border border-white/8 bg-[#05090f] px-4 sm:px-6 py-6 sm:py-8">
