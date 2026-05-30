@@ -1,17 +1,8 @@
-"use client";
-
-import { useState, useEffect } from "react";
-
 export function TerminalLine({ text, delay = 0 }: { text: string; delay?: number }) {
-  const [visible, setVisible] = useState(false);
-  useEffect(() => {
-    const t = setTimeout(() => setVisible(true), delay);
-    return () => clearTimeout(t);
-  }, [delay]);
-
   return (
     <div
-      className={`font-mono text-xs text-[#a8ff3e]/60 transition-opacity duration-300 ${visible ? "opacity-100" : "opacity-0"}`}
+      className="animate-fade-up font-mono text-xs text-[#a8ff3e]/60 opacity-0"
+      style={{ animationDelay: `${delay}ms` }}
     >
       <span className="mr-2 text-[#a8ff3e]/30">{">"}</span>
       {text}
@@ -21,7 +12,10 @@ export function TerminalLine({ text, delay = 0 }: { text: string; delay?: number
 
 export function TerminalBlock() {
   return (
-    <div className="animate-fade-up delay-500 mx-auto mt-16 w-full max-w-lg rounded-2xl border border-white/8 bg-[#080f18] p-5 text-left shadow-[0_32px_80px_rgba(0,0,0,0.6)]">
+    <div
+      className="animate-fade-up mx-auto mt-16 w-full max-w-lg rounded-2xl border border-white/8 bg-[#080f18] p-5 text-left opacity-0 shadow-[0_32px_80px_rgba(0,0,0,0.6)]"
+      style={{ animationDelay: "500ms" }}
+    >
       <div className="mb-4 flex items-center gap-2">
         <div className="h-3 w-3 rounded-full bg-[#ff5f57]" />
         <div className="h-3 w-3 rounded-full bg-[#ffbd2e]" />
