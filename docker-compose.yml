@@ -81,7 +81,7 @@ services:
     volumes:
       - ./backend:/app
       - ./agents:/agents
-    command: celery -A app.core.celery_app worker --loglevel=info -Q scans --concurrency=4
+    command: celery -A app.core.celery_app worker --loglevel=info -Q scans --pool=solo --concurrency=1
 
   # ── Celery Flower (monitoring) ───────────────────────────────────────────────
   flower:

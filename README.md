@@ -267,7 +267,7 @@ uvicorn app.main:app --reload --port 8000
 ```powershell
 cd backend
 .\.venv\Scripts\Activate.ps1
-celery -A app.core.celery_app worker --loglevel=info -Q scans
+celery -A app.core.celery_app worker --loglevel=info -Q scans --pool=solo --concurrency=1
 ```
 
 #### 5. Start the frontend

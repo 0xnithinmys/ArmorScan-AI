@@ -274,13 +274,16 @@ def render_markdown_report(report: dict[str, Any]) -> str:
 
 
 def render_pdf_report(report: dict[str, Any]) -> bytes:
+    import re
     text = render_markdown_report(report)
     lines = []
-    for raw_line in text.replace("#", "").splitlines():
-        line = raw_line.strip()
-        if line:
+    for raw_line in text.splitlines():
+        line = re.sub(r'^#+\s*', '', raw_line).strip()
+        if not line:
+            lines.append("")
+        else:
             lines.extend(_wrap_report_line(line, width=92))
-    return _simple_pdf(lines[:45])
+    return _simple_pdf(lines)
 
 
 def _wrap_report_line(line: str, *, width: int) -> list[str]:
@@ -307,20 +310,45 @@ def _pdf_escape(value: str) -> str:
 
 
 def _simple_pdf(lines: list[str]) -> bytes:
-    content_lines = ["BT", "/F1 11 Tf", "50 780 Td", "14 TL"]
-    for index, line in enumerate(lines):
-        if index:
-            content_lines.append("T*")
-        content_lines.append(f"({_pdf_escape(line)}) Tj")
-    content_lines.append("ET")
-    stream = "\n".join(content_lines).encode("latin-1", errors="replace")
     objects = [
         b"<< /Type /Catalog /Pages 2 0 R >>",
-        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
-        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-        b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"\nendstream",
     ]
+    
+    font_obj_id = 3
+    objects.append(b"")  # placeholder for Pages
+    objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+    
+    kids = []
+    page_count = 0
+    LINES_PER_PAGE = 45
+    
+    for page_start in range(0, max(1, len(lines)), LINES_PER_PAGE):
+        page_lines = lines[page_start:page_start + LINES_PER_PAGE]
+        
+        content_lines = ["BT", "/F1 11 Tf", "50 780 Td", "14 TL"]
+        for index, line in enumerate(page_lines):
+            if index:
+                content_lines.append("T*")
+            if line:
+                content_lines.append(f"({_pdf_escape(line)}) Tj")
+        content_lines.append("ET")
+        
+        stream = "\n".join(content_lines).encode("latin-1", errors="replace")
+        
+        page_obj_id = len(objects) + 1
+        stream_obj_id = page_obj_id + 1
+        kids.append(f"{page_obj_id} 0 R")
+        page_count += 1
+        
+        page_obj = f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 {font_obj_id} 0 R >> >> /Contents {stream_obj_id} 0 R >>".encode('ascii')
+        stream_obj = b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"\nendstream"
+        
+        objects.append(page_obj)
+        objects.append(stream_obj)
+        
+    pages_obj = f"<< /Type /Pages /Kids [{' '.join(kids)}] /Count {page_count} >>".encode('ascii')
+    objects[1] = pages_obj
+    
     pdf = bytearray(b"%PDF-1.4\n")
     offsets = [0]
     for idx, obj in enumerate(objects, start=1):
