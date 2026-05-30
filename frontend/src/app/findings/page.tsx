@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "../lib/auth-context";
 import { API_BASE, authHeaders, readError, Finding, Scan, shortId } from "../lib/api";
 import { Panel, EmptyState, SeverityBadge, StatusBadge, PageLoader } from "../components/ui";
@@ -41,14 +41,14 @@ export default function FindingsPage() {
     } catch (err) { setError(err instanceof Error ? err.message : "Failed"); }
   }
 
-  const displayed = findings.filter(f => {
+  const displayed = useMemo(() => findings.filter(f => {
     const scanMatch = filterScan === "all" || f.scan_id === filterScan;
     const sevMatch = filterSeverity === "all" || f.severity.toLowerCase() === filterSeverity;
     return scanMatch && sevMatch;
-  });
+  }), [findings, filterScan, filterSeverity]);
 
-  const critCount = findings.filter(f => f.risk_rating === "critical").length;
-  const highCount = findings.filter(f => f.risk_rating === "high").length;
+  const critCount = useMemo(() => findings.filter(f => f.risk_rating === "critical").length, [findings]);
+  const highCount = useMemo(() => findings.filter(f => f.risk_rating === "high").length, [findings]);
 
   if (isLoading) return <main className="min-h-screen bg-[#04080f] px-4 py-6 sm:px-6"><div className="mx-auto max-w-[1400px] space-y-5"><div className="h-[120px] rounded-2xl bg-[#080f18] animate-pulse"></div><div className="h-[400px] rounded-2xl bg-[#080f18] animate-pulse"></div></div></main>;
 

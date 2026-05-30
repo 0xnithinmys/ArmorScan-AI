@@ -216,7 +216,7 @@ export default function TargetDetailPage() {
           <div className="grid gap-4 lg:grid-cols-2">
 
             {/* Scope / attack surface */}
-            <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5">
+            <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5 min-w-0">
               <p className="font-mono text-[10px] uppercase tracking-[0.35em] text-[#a8ff3e]/50">Attack surface</p>
               <h3 className="mt-1 font-mono text-base font-semibold text-white">Scope entries</h3>
               <div className="mt-4">
@@ -233,7 +233,7 @@ export default function TargetDetailPage() {
             </div>
 
             {/* Auth proof status */}
-            <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5">
+            <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5 min-w-0">
               <p className="font-mono text-[10px] uppercase tracking-[0.35em] text-[#a8ff3e]/50">Authorization</p>
               <h3 className="mt-1 font-mono text-base font-semibold text-white">Ownership proof</h3>
               <div className="mt-4 space-y-3">
@@ -259,7 +259,7 @@ export default function TargetDetailPage() {
 
             {/* Last scan summary */}
             {scans.length > 0 && (
-              <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5 lg:col-span-2">
+              <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5 lg:col-span-2 min-w-0">
                 <p className="font-mono text-[10px] uppercase tracking-[0.35em] text-[#a8ff3e]/50">Last scan</p>
                 <h3 className="mt-1 font-mono text-base font-semibold text-white">Most recent result</h3>
                 <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -315,7 +315,7 @@ export default function TargetDetailPage() {
         {/* ── Auth tab ──────────────────────────────────────────────────────── */}
         {activeTab === "auth" && (
           <div className="grid gap-4 lg:grid-cols-2">
-            <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5">
+            <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5 min-w-0">
               <p className="font-mono text-[10px] uppercase tracking-[0.35em] text-[#a8ff3e]/50">Ownership verification</p>
               <h3 className="mt-1 mb-4 font-mono text-base font-semibold text-white">Authorize target</h3>
               <div className="space-y-3">
@@ -331,7 +331,7 @@ export default function TargetDetailPage() {
               </div>
             </div>
 
-            <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5">
+            <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5 min-w-0">
               <p className="font-mono text-[10px] uppercase tracking-[0.35em] text-[#a8ff3e]/50">Proof details</p>
               <h3 className="mt-1 mb-4 font-mono text-base font-semibold text-white capitalize">{authProofMethod.replace("_", " ")}</h3>
 
@@ -385,7 +385,7 @@ export default function TargetDetailPage() {
         {/* ── Notes tab ─────────────────────────────────────────────────────── */}
         {activeTab === "notes" && (
           <div className="grid gap-4 lg:grid-cols-2">
-            <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5">
+            <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5 min-w-0">
               <p className="font-mono text-[10px] uppercase tracking-[0.35em] text-[#a8ff3e]/50">Target notes</p>
               <h3 className="mt-1 mb-4 font-mono text-base font-semibold text-white">Internal notes</h3>
               <textarea value={notes} onChange={e => setNotes(e.target.value)}
@@ -394,7 +394,7 @@ export default function TargetDetailPage() {
                 className="field resize-none w-full" />
               <GreenButton className="mt-3" onClick={() => setMessage("Notes saved locally.")}>Save notes</GreenButton>
             </div>
-            <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5">
+            <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5 min-w-0">
               <p className="font-mono text-[10px] uppercase tracking-[0.35em] text-[#a8ff3e]/50">Tags</p>
               <h3 className="mt-1 mb-4 font-mono text-base font-semibold text-white">Labels & categorization</h3>
               <input className="field" placeholder="production, pci-scope, bug-bounty, ..." value={tags} onChange={e => setTags(e.target.value)} />

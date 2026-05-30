@@ -69,7 +69,7 @@ export default function ReportsPage() {
 
         <div className="grid gap-5 lg:grid-cols-[1fr_340px]">
           {/* Scan selector */}
-          <Panel title="Select scan" eyebrow={`${scans.length} scans available`}>
+          <Panel title="Select scan" eyebrow={`${scans.length} scans available`} className="min-w-0">
             {scans.length === 0 ? <EmptyState text="No scans available for reporting yet." /> : (
               <div className="space-y-2">
                 {scans.map(scan => (
@@ -90,7 +90,7 @@ export default function ReportsPage() {
           </Panel>
 
           {/* Report panel */}
-          <div className="space-y-4">
+          <div className="space-y-4 min-w-0">
             <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5">
               <p className="font-mono text-[10px] uppercase tracking-[0.35em] text-[#a8ff3e]/60">Selected scan</p>
               {selected ? (
@@ -136,7 +136,7 @@ export default function ReportsPage() {
             {/* Raw report JSON */}
             {selected?.report_json && (
               <Panel title="Report JSON" eyebrow="raw payload">
-                <pre className="max-h-48 overflow-auto rounded-xl border border-white/7 bg-[#05090f] p-4 font-mono text-[10px] leading-5 text-white/45">
+                <pre className="max-h-48 overflow-auto rounded-xl border border-white/7 bg-[#05090f] p-4 font-mono text-[10px] leading-5 text-white/45 whitespace-pre-wrap break-all">
                   {JSON.stringify(selected.report_json, null, 2)}
                 </pre>
               </Panel>

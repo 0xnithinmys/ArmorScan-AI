@@ -114,7 +114,7 @@ function TraceNode({ node, index }: { node: Record<string, unknown>; index: numb
         <span className="font-mono text-[10px] text-white/20">{expanded ? "▲" : "▼"}</span>
       </button>
       {expanded && (
-        <pre className="border-t border-white/5 px-4 py-3 font-mono text-[10px] leading-5 text-white/40 overflow-auto max-h-48">
+        <pre className="border-t border-white/5 px-4 py-3 font-mono text-[10px] leading-5 text-white/40 overflow-auto max-h-48 whitespace-pre-wrap break-all">
           {JSON.stringify(node, null, 2)}
         </pre>
       )}
@@ -376,11 +376,11 @@ export default function ScanDetailPage() {
 
         {/* ── Evidence tab ──────────────────────────────────────────────────── */}
         {activeTab === "evidence" && (
-          <div className="space-y-4">
+          <div className="space-y-4 min-w-0">
             <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5">
               <p className="font-mono text-[10px] uppercase tracking-[0.35em] text-[#a8ff3e]/50 mb-4">Discovered routes & forms</p>
               {scan.report_json ? (
-                <pre className="max-h-96 overflow-auto rounded-xl border border-white/7 bg-[#05090f] p-4 font-mono text-[10px] leading-5 text-white/45">
+                <pre className="max-h-96 overflow-auto rounded-xl border border-white/7 bg-[#05090f] p-4 font-mono text-[10px] leading-5 text-white/45 whitespace-pre-wrap break-all">
                   {JSON.stringify(scan.report_json, null, 2)}
                 </pre>
               ) : (
@@ -393,19 +393,19 @@ export default function ScanDetailPage() {
         {/* ── Policy tab ────────────────────────────────────────────────────── */}
         {activeTab === "policy" && (
           <div className="grid gap-4 lg:grid-cols-2">
-            <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5">
+            <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5 min-w-0">
               <p className="font-mono text-[10px] uppercase tracking-[0.35em] text-[#a8ff3e]/50 mb-4">Signed intent plan</p>
-              <pre className="max-h-80 overflow-auto rounded-xl border border-white/7 bg-[#05090f] p-4 font-mono text-[10px] leading-5 text-white/45">
+              <pre className="max-h-80 overflow-auto rounded-xl border border-white/7 bg-[#05090f] p-4 font-mono text-[10px] leading-5 text-white/45 whitespace-pre-wrap break-all">
                 {JSON.stringify(scan.intent_plan ?? { message: "No intent plan." }, null, 2)}
               </pre>
             </div>
-            <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5">
+            <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5 min-w-0">
               <p className="font-mono text-[10px] uppercase tracking-[0.35em] text-[#a8ff3e]/50 mb-4">Policy decisions · {scan.policy_decisions.length}</p>
               {scan.policy_decisions.length === 0 ? <EmptyState text="No policy decisions recorded." /> : (
                 <div className="space-y-2">
                   {scan.policy_decisions.map((d, i) => (
                     <div key={i} className="rounded-xl border border-white/6 bg-[#05090f] p-3">
-                      <pre className="font-mono text-[10px] leading-5 text-white/40 whitespace-pre-wrap">
+                      <pre className="font-mono text-[10px] leading-5 text-white/40 whitespace-pre-wrap break-all">
                         {JSON.stringify(d, null, 2)}
                       </pre>
                     </div>

@@ -243,7 +243,7 @@ export default function FindingDetailPage() {
         {/* ── Overview tab ──────────────────────────────────────────────────── */}
         {activeTab === "overview" && (
           <div className="grid gap-4 lg:grid-cols-[1.4fr_0.6fr]">
-            <div className="space-y-4">
+            <div className="space-y-4 min-w-0">
               {/* Summary */}
               <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5">
                 <p className="font-mono text-[10px] uppercase tracking-[0.35em] text-[#a8ff3e]/50 mb-3">Summary</p>
@@ -268,7 +268,7 @@ export default function FindingDetailPage() {
             </div>
 
             {/* Risk factors sidebar */}
-            <div className="space-y-4">
+            <div className="space-y-4 min-w-0">
               <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5">
                 <p className="font-mono text-[10px] uppercase tracking-[0.35em] text-[#a8ff3e]/50 mb-3">Risk factors</p>
                 {riskFactorKeys.length === 0 ? (
@@ -345,7 +345,7 @@ export default function FindingDetailPage() {
         {/* ── Remediation tab ───────────────────────────────────────────────── */}
         {activeTab === "remediation" && (
           <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
-            <div className="space-y-4">
+            <div className="space-y-4 min-w-0">
               <div className="rounded-2xl border border-[#a8ff3e]/10 bg-[#a8ff3e]/4 p-5">
                 <p className="font-mono text-[10px] uppercase tracking-[0.35em] text-[#a8ff3e]/60 mb-3">Remediation guidance</p>
                 {finding.remediation ? (
@@ -381,7 +381,7 @@ export default function FindingDetailPage() {
               </div>
             </div>
 
-            <div className="space-y-4">
+            <div className="space-y-4 min-w-0">
               <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5">
                 <p className="font-mono text-[10px] uppercase tracking-[0.35em] text-[#a8ff3e]/50 mb-3">Retest</p>
                 <p className="font-mono text-xs text-white/40 mb-4">After applying a fix, trigger a targeted retest scan to verify the remediation.</p>

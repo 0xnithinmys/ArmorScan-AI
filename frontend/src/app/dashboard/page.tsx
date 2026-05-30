@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "../lib/auth-context";
@@ -121,49 +121,49 @@ export default function DashboardPage() {
     });
   }, [token, load, router, clearToken]);
 
-  // ── derived metrics ──────────────────────────────────────────────────────
-  const liveStatuses = new Set(["queued", "planning", "executing", "observing", "reflecting"]);
-  const verifiedTargets = targets.filter(t => t.authorization_status === "verified").length;
-  const activeScans = scans.filter(s => liveStatuses.has(s.status)).length;
-  const critFindings = findings.filter(f => f.risk_rating === "critical").length;
-  const highFindings = findings.filter(f => f.risk_rating === "high").length;
-  const openFindings = findings.filter(f => f.status === "open").length;
-  const resolvedFindings = findings.filter(f => f.status === "resolved").length;
+  // ── derived metrics (memoized) ──────────────────────────────────────────
+  const liveStatuses = useMemo(() => new Set(["queued", "planning", "executing", "observing", "reflecting"]), []);
+  const verifiedTargets = useMemo(() => targets.filter(t => t.authorization_status === "verified").length, [targets]);
+  const activeScans = useMemo(() => scans.filter(s => liveStatuses.has(s.status)).length, [scans, liveStatuses]);
+  const critFindings = useMemo(() => findings.filter(f => f.risk_rating === "critical").length, [findings]);
+  const highFindings = useMemo(() => findings.filter(f => f.risk_rating === "high").length, [findings]);
+  const openFindings = useMemo(() => findings.filter(f => f.status === "open").length, [findings]);
+  const resolvedFindings = useMemo(() => findings.filter(f => f.status === "resolved").length, [findings]);
 
-  // fake 7-day sparklines from real counts (distribute across buckets)
-  const scanTrend = Array.from({ length: 7 }, (_, i) =>
+  const scanTrend = useMemo(() => Array.from({ length: 7 }, (_, i) =>
     scans.filter(s => {
       const d = new Date(s.created_at); const now = new Date();
       return (now.getTime() - d.getTime()) < (i + 1) * 86400000 * 1.2;
     }).length
-  );
+  ), [scans]);
 
-  // severity donut data
-  const severitySegments = [
+  const severitySegments = useMemo(() => [
     { value: critFindings, color: "#ff7c70", label: "Critical" },
     { value: highFindings, color: "#ffb15f", label: "High" },
     { value: findings.filter(f => f.risk_rating === "medium").length, color: "#e2eb72", label: "Medium" },
     { value: findings.filter(f => f.risk_rating === "low").length, color: "#8bd8ff", label: "Low" },
-  ];
+  ], [critFindings, highFindings, findings]);
 
-  // engine coverage mock (real would come from scan report_json)
-  const engines = [
+  const engines = useMemo(() => [
     { name: "ZAP / DAST", runs: scans.filter(s => s.scan_type === "url").length, color: "#a8ff3e" },
     { name: "Semgrep / SAST", runs: scans.filter(s => s.scan_type === "github").length, color: "#8bd8ff" },
     { name: "API Probe", runs: scans.filter(s => s.scan_type === "api").length, color: "#ffb15f" },
     { name: "Gitleaks", runs: scans.filter(s => s.scan_type === "github").length, color: "#ff7c70" },
-  ];
+  ], [scans]);
 
-  const recentFindings = findings
-    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-    .slice(0, 5);
+  const recentFindings = useMemo(() =>
+    [...findings]
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .slice(0, 5)
+  , [findings]);
 
-  const recentScans = scans
-    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-    .slice(0, 4);
+  const recentScans = useMemo(() =>
+    [...scans]
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .slice(0, 4)
+  , [scans]);
 
-  // auth proof breakdown
-  const unverifiedTargets = targets.filter(t => t.authorization_status !== "verified");
+  const unverifiedTargets = useMemo(() => targets.filter(t => t.authorization_status !== "verified"), [targets]);
 
   if (isLoading) return <main className="min-h-screen bg-[#04080f] px-4 py-6 sm:px-6"><div className="mx-auto max-w-[1600px] space-y-6"><div className="h-[80px] rounded-2xl bg-[#080f18] animate-pulse"></div><div className="grid grid-cols-4 gap-4"><div className="h-[120px] rounded-2xl bg-[#080f18] animate-pulse"></div><div className="h-[120px] rounded-2xl bg-[#080f18] animate-pulse"></div><div className="h-[120px] rounded-2xl bg-[#080f18] animate-pulse"></div><div className="h-[120px] rounded-2xl bg-[#080f18] animate-pulse"></div></div></div></main>;
 
@@ -192,7 +192,7 @@ export default function DashboardPage() {
         </div>
 
         {/* ── Top stat row ─────────────────────────────────────────────────── */}
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 lg:grid-cols-4">
           <StatCard label="Targets" value={targets.length} sub={`${verifiedTargets} verified · ${unverifiedTargets.length} pending auth`} href="/targets" trend={[targets.length, targets.length, targets.length, targets.length, targets.length, targets.length, targets.length]} />
           <StatCard label="Total scans" value={scans.length} sub={`${activeScans} active now`} href="/scans" trend={scanTrend} />
           <StatCard label="Open findings" value={openFindings} sub={`${critFindings} critical · ${highFindings} high`} href="/findings" accent={critFindings > 0} trend={[openFindings, openFindings, openFindings, openFindings, openFindings, openFindings, openFindings]} />
@@ -203,7 +203,7 @@ export default function DashboardPage() {
         <div className="grid gap-4 lg:grid-cols-3">
 
           {/* Severity breakdown */}
-          <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5">
+          <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5 min-w-0">
             <p className="font-mono text-[10px] uppercase tracking-[0.35em] text-[#a8ff3e]/50">Severity distribution</p>
             <h3 className="mt-1 font-mono text-base font-semibold text-white">Finding risk profile</h3>
             <div className="mt-4 flex items-center gap-5">
@@ -229,7 +229,7 @@ export default function DashboardPage() {
           </div>
 
           {/* Engine coverage */}
-          <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5">
+          <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5 min-w-0">
             <p className="font-mono text-[10px] uppercase tracking-[0.35em] text-[#a8ff3e]/50">Engine coverage</p>
             <h3 className="mt-1 font-mono text-base font-semibold text-white">Scanner utilization</h3>
             <div className="mt-4 space-y-3">
@@ -251,7 +251,7 @@ export default function DashboardPage() {
           </div>
 
           {/* Target auth health */}
-          <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5">
+          <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5 min-w-0">
             <p className="font-mono text-[10px] uppercase tracking-[0.35em] text-[#a8ff3e]/50">Authorization health</p>
             <h3 className="mt-1 font-mono text-base font-semibold text-white">Target proof status</h3>
             {targets.length === 0 ? (
@@ -290,7 +290,7 @@ export default function DashboardPage() {
         <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
 
           {/* Recent findings */}
-          <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5">
+          <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5 min-w-0">
             <SectionHeader eyebrow="Live threat feed" title="Recent findings" action={{ label: "All findings", href: "/findings" }} />
             <div className="mt-4 space-y-2">
               {recentFindings.length === 0 ? (
@@ -315,7 +315,7 @@ export default function DashboardPage() {
           </div>
 
           {/* Recent scans */}
-          <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5">
+          <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5 min-w-0">
             <SectionHeader eyebrow="Scan activity" title="Recent scans" action={{ label: "All scans", href: "/scans" }} />
             <div className="mt-4 space-y-2">
               {recentScans.length === 0 ? (
@@ -350,7 +350,7 @@ export default function DashboardPage() {
         <div className="grid gap-4 lg:grid-cols-[0.7fr_1.3fr]">
 
           {/* Report/export activity */}
-          <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5">
+          <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5 min-w-0">
             <SectionHeader eyebrow="Report activity" title="Export status" action={{ label: "Reports", href: "/reports" }} />
             <div className="mt-4 space-y-2">
               {scans.filter(s => s.report_json).length === 0 ? (
@@ -374,7 +374,7 @@ export default function DashboardPage() {
           </div>
 
           {/* Audit trail */}
-          <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5">
+          <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5 min-w-0">
             <SectionHeader eyebrow="Policy ledger" title="Audit trail" action={{ label: "Full ledger", href: "/audit" }} />
             <div className="mt-4 space-y-1.5">
               {auditEvents.length === 0 ? (

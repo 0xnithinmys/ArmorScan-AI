@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "../lib/auth-context";
 import { API_BASE, authHeaders, readError, AuditEvent, Scan, shortId } from "../lib/api";
 import { Panel, EmptyState } from "../components/ui";
@@ -28,15 +28,14 @@ export default function AuditPage() {
 
   useEffect(() => { if (!isLoaded) return; load().catch(e => setError(e.message)); }, [load, isLoaded]);
 
-  const selectedScan = scans.find(s => s.id === selectedScanId);
+  const selectedScan = useMemo(() => scans.find(s => s.id === selectedScanId), [scans, selectedScanId]);
 
-  // Deduplicate event_type prefixes for filter
-  const eventTypes = ["all", ...Array.from(new Set(events.map(e => e.event_type.split(".")[0])))];
+  const eventTypes = useMemo(() => ["all", ...Array.from(new Set(events.map(e => e.event_type.split(".")[0])))], [events]);
 
-  const displayed = events.filter(e => filter === "all" || e.event_type.startsWith(filter));
+  const displayed = useMemo(() => events.filter(e => filter === "all" || e.event_type.startsWith(filter)), [events, filter]);
 
-  const policyCount = events.filter(e => e.event_type.startsWith("policy.")).length;
-  const scanCount = events.filter(e => e.event_type.startsWith("scan.")).length;
+  const policyCount = useMemo(() => events.filter(e => e.event_type.startsWith("policy.")).length, [events]);
+  const scanCount = useMemo(() => events.filter(e => e.event_type.startsWith("scan.")).length, [events]);
 
   return (
     <main className="min-h-screen bg-[#04080f] px-4 py-6 sm:px-6">
@@ -57,7 +56,7 @@ export default function AuditPage() {
 
         <div className="grid gap-5 lg:grid-cols-[1fr_360px]">
           {/* Audit events */}
-          <div className="space-y-4">
+          <div className="space-y-4 min-w-0">
             {/* Filters */}
             <div className="flex flex-wrap gap-2">
               {eventTypes.map(type => (
@@ -94,7 +93,7 @@ export default function AuditPage() {
           </div>
 
           {/* Policy sidebar */}
-          <div className="space-y-4">
+          <div className="space-y-4 min-w-0">
             {/* Scan selector */}
             <div className="rounded-2xl border border-white/7 bg-[#080f18] p-5">
               <p className="font-mono text-[10px] uppercase tracking-[0.35em] text-[#a8ff3e]/60 mb-3">Intent plan inspector</p>
@@ -105,7 +104,7 @@ export default function AuditPage() {
             </div>
 
             <Panel title="Signed intent plan" eyebrow="ArmorIQ policy">
-              <pre className="max-h-[420px] overflow-auto rounded-xl border border-white/7 bg-[#050a0f] p-4 font-mono text-[10px] leading-5 text-white/50">
+              <pre className="max-h-[420px] overflow-auto rounded-xl border border-white/7 bg-[#050a0f] p-4 font-mono text-[10px] leading-5 text-white/50 whitespace-pre-wrap break-all">
                 {JSON.stringify(selectedScan?.intent_plan ?? { message: "Select a scan to inspect its ArmorIQ intent plan." }, null, 2)}
               </pre>
             </Panel>
@@ -116,7 +115,7 @@ export default function AuditPage() {
                 <div className="space-y-2">
                   {selectedScan.policy_decisions.map((decision, i) => (
                     <div key={i} className="rounded-xl border border-white/6 bg-[#05090f] p-3">
-                      <pre className="font-mono text-[10px] text-white/45 whitespace-pre-wrap">
+                      <pre className="font-mono text-[10px] text-white/45 whitespace-pre-wrap break-all">
                         {JSON.stringify(decision, null, 2)}
                       </pre>
                     </div>

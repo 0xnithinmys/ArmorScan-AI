@@ -172,7 +172,7 @@ export default function TargetDetailPage() {
               </div>
 
               <div className="grid gap-4 md:grid-cols-[200px_1fr]">
-                <div className="flex flex-col gap-2">
+                <div className="flex flex-col gap-2 min-w-0">
                   {[
                     { id: "dns_txt", label: "DNS TXT Record" },
                     { id: "http_file", label: "HTTP File" },
@@ -193,7 +193,7 @@ export default function TargetDetailPage() {
                   ))}
                 </div>
 
-                <div className="rounded-xl border border-white/10 bg-[#05090f] p-5">
+                <div className="rounded-xl border border-white/10 bg-[#05090f] p-5 min-w-0">
                   {!activeProof ? (
                     <div className="space-y-4">
                       <p className="font-mono text-sm text-white/80">

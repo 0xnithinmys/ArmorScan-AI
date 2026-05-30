@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import { IBM_Plex_Mono, Libre_Baskerville } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "./lib/auth-context";
@@ -35,7 +36,20 @@ export default function RootLayout({
         <AuthProvider>
           <ScanlineOverlay />
           <Navbar />
-          <div className="pt-14">{children}</div>
+          <div className="pt-14">
+            <Suspense
+              fallback={
+                <div className="flex min-h-screen items-center justify-center bg-[#04080f]">
+                  <div className="text-center">
+                    <div className="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-white/10 border-t-[#a8ff3e]" />
+                    <p className="mt-4 font-mono text-xs text-white/30">Loading...</p>
+                  </div>
+                </div>
+              }
+            >
+              {children}
+            </Suspense>
+          </div>
         </AuthProvider>
       </body>
     </html>
