@@ -1,159 +1,187 @@
 # ArmorScan AI
 
-ArmorScan AI is a security auditing platform with a web control plane, a FastAPI orchestration API, asynchronous scan workers, and AI-assisted scanning agents.
+ArmorScan AI is a local-first security auditing platform with a Next.js operator console, a FastAPI orchestration API, an asynchronous Celery worker, and a Python agent pipeline that performs recon, safe validation, scanner orchestration, correlation, and reporting.
 
-It is built for a local workflow where you can:
-- register approved targets
-- verify target authorization
-- queue governed scans for URLs, APIs, and repositories
-- stream scan progress live
-- review findings and evidence
-- export reports in multiple formats
+The system is designed for authorized testing only. It expects you to register targets, verify authorization, queue governed scans, watch live execution, review findings, and export reports.
 
-## Project Summary
+## What This Repo Contains
 
-ArmorScan AI is organized as a local-first security operations application:
-- the `frontend` is the operator dashboard
-- the `backend` is the API and orchestration layer
-- the `worker` executes scan jobs asynchronously
-- the `agents` package performs the actual scan workflow
-- PostgreSQL stores operational data and Redis powers queues plus live events
+- `frontend/` - Next.js operator UI
+- `backend/` - FastAPI API, database models, services, and Celery task entrypoints
+- `agents/` - the ArmorScan agent runtime, specialist agents, and scanner integrations
+- `docker-compose.yml` - local multi-service stack
+- `README.md` - this guide
 
-In practice, the product flow is simple:
-1. create an account
-2. register a target
-3. verify that the target is authorized
-4. queue a governed scan
-5. review findings
-6. export the final report
+## High-Level Architecture
 
-## What This Project Includes
+```mermaid
+flowchart LR
+    U[Operator] --> FE[Next.js Frontend]
+    FE -->|REST| API[FastAPI Backend]
+    FE -->|WebSocket| API
 
-| Area | Purpose |
-|---|---|
-| Frontend | Next.js dashboard for auth, targets, scans, findings, reports, and audit events |
-| Backend | FastAPI API for auth, target management, scan orchestration, findings, reports, and WebSocket events |
-| Worker | Celery worker that executes scan jobs asynchronously |
-| Agents | Python scan workflow that performs recon, browser analysis, API discovery, repo inspection, risk analysis, and reporting |
-| Storage | PostgreSQL for persistent data and Redis for Celery plus live event streaming |
+    API --> DB[(PostgreSQL)]
+    API --> REDIS[(Redis)]
+    API -->|enqueue scans queue| W[Celery Worker]
 
-## Core Capabilities
+    W --> AG[ArmorScan Agent Pipeline]
+    AG --> PW[Playwright browser recon]
+    AG --> ENG[Scanner engines]
+    AG --> AI[Groq / OpenAI / Anthropic]
 
-- Target registry for `url`, `api`, and `github` scan targets
-- Authorization proof flow for DNS TXT, HTTP file, meta tag, GitHub file, or manual attestation
-- Governed scan execution with signed intent plans and policy decisions
-- Live scan updates over WebSocket
-- Findings workflow with status changes, evidence, comments, suppression, and history
-- Report export in `json`, `markdown`, `pdf`, and `sarif`
-- Audit trail for key policy and execution events
+    ENG --> ZAP[OWASP ZAP]
+    ENG --> NUC[nuclei]
+    ENG --> SAST[semgrep / bandit]
+    ENG --> SUP[gitleaks / trivy]
+
+    API --> REP[Reports: JSON / Markdown / PDF / SARIF]
+```
+
+## Core Flow
+
+1. Sign in or create an account.
+2. Register a target and choose the target type.
+3. Prove authorization for the target when required.
+4. Create or select a scan profile.
+5. Queue a scan.
+6. The backend records the scan and dispatches a Celery task to the `scans` queue.
+7. The worker runs the agent pipeline, scanner engines, and safe validation steps.
+8. Findings, evidence, and trace data are stored in PostgreSQL.
+9. The UI receives live updates over WebSocket.
+10. Export the report as JSON, Markdown, PDF, or SARIF.
+
+## Agent Architecture
+
+The agent runtime is implemented as a LangGraph-compatible workflow with a sequential fallback when `langgraph` is unavailable. The main pipeline is:
+
+1. `planner`
+2. `recon`
+3. `browser_workflow`
+4. `api_discovery`
+5. `repo_sast`
+6. `supply_chain`
+7. `scanner_registry`
+8. `engines`
+9. `evidence_normalization`
+10. `analysis`
+11. `exploit`
+12. `correlation`
+13. `retest`
+14. `reporter`
+
+### Specialist Agents
+
+The specialist layer lives in `agents/armorscan/specialists.py` and currently includes:
+
+- `browser_workflow_agent`
+- `api_discovery_agent`
+- `repo_sast_agent`
+- `dependency_supply_chain_agent`
+- `scanner_registry_agent`
+- `evidence_normalization_agent`
+- `correlation_agent`
+- `retest_agent`
+
+### What Each Stage Does
+
+- `planner` builds the governed scan plan and allowed actions.
+- `recon` performs passive HTTP and browser reconnaissance.
+- `browser_workflow` maps forms, uploads, workflows, and JavaScript-discovered surfaces.
+- `api_discovery` finds API endpoints and routes.
+- `repo_sast` inventories repository routes and source surfaces for GitHub scans.
+- `supply_chain` inspects dependency and infrastructure surfaces for GitHub scans.
+- `scanner_registry` advertises which engines are available for the current scan type.
+- `engines` runs the external scanner engines.
+- `evidence_normalization` turns browser, HTTP, API, repo, and scanner data into normalized evidence.
+- `analysis` drafts candidate findings with LLM assistance and fallback heuristics.
+- `exploit` performs safe, policy-checked validation probes.
+- `correlation` links findings to evidence and adjusts confidence.
+- `retest` prepares safe retest checks for confirmed issues.
+- `reporter` synthesizes the final report payload.
+
+## Supported Scan Types
+
+- `url` - public web target scanning
+- `api` - API-oriented scanning
+- `github` - repository and supply-chain analysis
+
+## Frontend Modules
+
+The Next.js app exposes these main operator areas:
+
+- Dashboard
+- Organizations
+- Targets
+- Scans
+- Findings
+- Reports
+- Platform
+- Audit
+- Login
+
+The frontend uses `NEXT_PUBLIC_API_BASE_URL` and derives the WebSocket URL from that same base.
+
+## Backend API Surface
+
+All API routes are mounted under `/api/v1`.
+
+- `/auth` - register, login, current user
+- `/organizations` - organizations, teams, and membership context
+- `/targets` - target CRUD and authorization proof workflow
+- `/scans` - queue, inspect, cancel, retry, duplicate, pause, and resume scans
+- `/findings` - list findings, update status, add evidence, comments, and suppression
+- `/reports` - export JSON, Markdown, PDF, and SARIF reports
+- `/platform` - platform metadata, scan profiles, and operational data
+- `/audit` - audit and governance events
+- `/ws` - live scan event stream
+
+### Common Target Authorization Flow
+
+For a web target, the typical authorization sequence is:
+
+1. Create the target.
+2. Request a proof challenge.
+3. Fulfill the challenge through DNS, HTTP, meta tag, GitHub file, or manual attestation.
+4. Verify the proof.
+5. Queue the scan once the target is authorized.
+
+## Scanner and Tooling Support
+
+The agent registry currently knows about these engines:
+
+- `nuclei` - template-driven web checks
+- `zap-baseline` - OWASP ZAP passive/baseline scanning
+- `semgrep` - source code scanning
+- `bandit` - Python security linting
+- `gitleaks` - secret scanning
+- `trivy` - dependency, filesystem, container, and IaC scanning
+
+Scanner availability is detected at runtime. If an engine is not installed, the scan keeps going and records the missing tool instead of failing the whole job.
 
 ## Technology Stack
 
 | Layer | Technology |
 |---|---|
-| Frontend | Next.js, React, TypeScript |
-| Backend API | FastAPI, Pydantic, SQLAlchemy |
-| Async Jobs | Celery |
-| Scan Workflow | Python agent pipeline with LangGraph-compatible workflow structure |
-| Browser Automation | Playwright |
+| Frontend | Next.js 16, React 19, TypeScript |
+| Backend API | FastAPI, SQLAlchemy, Pydantic |
+| Async jobs | Celery |
+| Workflow engine | LangGraph-compatible agent pipeline |
+| Browser recon | Playwright |
 | Database | PostgreSQL |
-| Queue and Event Transport | Redis |
+| Queue / events | Redis |
 | Reports | JSON, Markdown, PDF, SARIF |
-
-## Architecture
-
-```mermaid
-flowchart LR
-    U[User in Browser] --> FE[Next.js Frontend\nlocalhost:3000]
-    FE -->|REST| API[FastAPI Backend\nlocalhost:8000/api/v1]
-    FE -->|WebSocket| API
-
-    API --> DB[(PostgreSQL)]
-    API --> REDIS[(Redis)]
-    API -->|Dispatch scan job| W[Celery Worker\nscans queue]
-
-    W --> AG[ArmorScan Agents\nLangGraph workflow]
-    AG --> PW[Playwright]
-    AG --> SE[Scanning engines]
-
-    W --> DB
-    W --> REDIS
-    API --> REP[Report exports\nJSON / Markdown / PDF / SARIF]
-```
-
-## Scan Flow
-
-```mermaid
-sequenceDiagram
-    participant User
-    participant UI as Frontend
-    participant API as Backend API
-    participant Policy as Policy Engine
-    participant Worker as Celery Worker
-    participant Agents as Scan Agents
-    participant DB as PostgreSQL
-
-    User->>UI: Register or sign in
-    User->>UI: Create target
-    UI->>API: POST /auth and POST /targets
-    User->>UI: Verify target authorization
-    UI->>API: POST /targets/{id}/proofs/challenge and /authorize
-    User->>UI: Queue scan
-    UI->>API: POST /scans
-    API->>Policy: Evaluate request and sign intent plan
-    API->>Worker: Dispatch scan job
-    Worker->>Agents: Run scan workflow
-    Agents-->>Worker: Findings, trace, report data
-    Worker->>DB: Persist scan state and findings
-    API-->>UI: REST responses and live WebSocket events
-    User->>UI: Export report
-    UI->>API: GET /reports/{scan_id}/*
-```
-
-## Main Product Areas
-
-| Module | What you do there |
-|---|---|
-| Dashboard | View the overall platform state |
-| Targets | Create targets and manage authorization verification |
-| Scans | Queue new scans, watch live progress, inspect intent plans |
-| Findings | Review prioritized findings and update remediation status |
-| Reports | Export scan output in operational formats |
-| Audit | Review governance and execution events |
-| Login | Register a user and sign in locally |
-
-## How It Works Locally
-
-When running locally, the app behaves like this:
-
-1. The frontend calls the backend at `/api/v1`
-2. The backend validates the request, creates the scan record, and signs an intent plan
-3. The backend dispatches a Celery task to the `scans` queue
-4. The worker runs the scan workflow from the `agents` package
-5. Findings, trace data, and reports are stored in PostgreSQL
-6. Live events are streamed back to the UI through WebSocket updates
-
-## API Surface
-
-| Endpoint Group | Purpose |
-|---|---|
-| `/api/v1/auth` | Register, log in, and fetch the current user |
-| `/api/v1/organizations` | Organization and access context |
-| `/api/v1/targets` | Target CRUD and authorization proof workflows |
-| `/api/v1/scans` | Queue, inspect, cancel, and fetch scan-related data |
-| `/api/v1/findings` | List findings, update status, add evidence and comments |
-| `/api/v1/reports` | Export PDF, Markdown, JSON, and SARIF reports |
-| `/api/v1/audit` | Review audit and policy events |
-| `/api/v1/ws` | Live scan event stream |
+| AI providers | Groq, OpenAI, Anthropic |
 
 ## Repository Layout
 
 ```text
 ArmorScan AI/
-|-- frontend/          # Next.js application
-|-- backend/           # FastAPI application and Celery worker code
-|-- agents/            # Scan workflow and agent tooling
-|-- docker-compose.yml # Local multi-service stack
+|-- frontend/            # Next.js operator UI
+|-- backend/             # FastAPI app, services, models, worker tasks
+|-- agents/              # Agent pipeline, scanners, runtime helpers
+|-- docker-compose.yml   # Local stack
+|-- userflow.md          # Product flow reference
+|-- AI-Powered Web Security Auditor Design.md
 |-- README.md
 ```
 
@@ -161,19 +189,22 @@ ArmorScan AI/
 
 ### Prerequisites
 
-- Docker Desktop with Docker Compose
+- Docker Desktop and Docker Compose
 - Node.js 20+
 - Python 3.12+
-- Chromium install for Playwright when running the worker outside Docker
+- Chromium for Playwright if you run the worker outside Docker
 
-### Option 1: Run with Docker
+### Option 1: Run Everything with Docker
 
-This is the fastest way to start the full stack locally.
-
-1. Create a root `.env` file in the repository.
+1. Create a root `.env` file.
 
 ```env
 SECRET_KEY=change-me
+DATABASE_URL=postgresql+asyncpg://armorscan:armorscan@postgres:5432/armorscan
+REDIS_URL=redis://redis:6379/0
+CELERY_BROKER_URL=redis://redis:6379/0
+CELERY_RESULT_BACKEND=redis://redis:6379/1
+ALLOWED_ORIGINS=["http://localhost:3000"]
 GROQ_API_KEY=your_key_here
 OPENAI_API_KEY=
 ANTHROPIC_API_KEY=
@@ -187,7 +218,7 @@ ARMORIQ_API_URL=https://api.armoriq.ai
 docker compose up --build -d
 ```
 
-3. Run database migrations.
+3. Run migrations.
 
 ```powershell
 docker compose exec backend alembic upgrade head
@@ -196,42 +227,23 @@ docker compose exec backend alembic upgrade head
 4. Open the app.
 
 - Frontend: `http://localhost:3000`
-- API docs: `http://localhost:8000/docs`
+- Backend docs: `http://localhost:8000/docs`
+- Health: `http://localhost:8000/health`
 - Flower: `http://localhost:5555`
-
-5. Create a local user account from the login page, then:
-- add a target
-- complete or record an authorization proof
-- queue a scan
-- watch live scan events
-- review findings and export reports
-
-### First Local Run Checklist
-
-After the app is up, use this order:
-
-1. Open `http://localhost:3000`
-2. Create a local account from the login screen
-3. Add a target in the Targets module
-4. Complete a proof flow or record a manual attestation
-5. Open Scans and queue a scan
-6. Watch the live scan stream
-7. Open Findings to review results
-8. Open Reports to export JSON, Markdown, PDF, or SARIF
 
 ### Option 2: Run in Development Mode
 
-Use this when you want hot reload for the frontend and backend.
+Use this when you want hot reload.
 
-#### 1. Start infrastructure only
+#### 1. Start Postgres and Redis
 
 ```powershell
 docker compose up -d postgres redis
 ```
 
-#### 2. Configure backend and worker environment
+#### 2. Set backend environment
 
-Create a root `.env` file with the values below.
+Create a root `.env` file.
 
 ```env
 SECRET_KEY=change-me
@@ -241,15 +253,17 @@ CELERY_BROKER_URL=redis://localhost:6379/0
 CELERY_RESULT_BACKEND=redis://localhost:6379/1
 ALLOWED_ORIGINS=["http://localhost:3000"]
 GROQ_API_KEY=your_key_here
-OPENAI_API_KEY=
+GROQ_BASE_URL=https://api.groq.com/openai/v1
+GROQ_MODEL=openai/gpt-oss-20b
 ANTHROPIC_API_KEY=
+OPENAI_API_KEY=
 ARMORIQ_API_KEY=
 ARMORIQ_API_URL=https://api.armoriq.ai
 ```
 
-At least one AI provider key should be set for agent reasoning.
+At least one AI provider key should be present for agent reasoning.
 
-#### 3. Start the backend API
+#### 3. Start the backend
 
 ```powershell
 cd backend
@@ -262,7 +276,7 @@ alembic upgrade head
 uvicorn app.main:app --reload --port 8000
 ```
 
-#### 4. Start the scan worker in a new terminal
+#### 4. Start the worker
 
 ```powershell
 cd backend
@@ -272,7 +286,7 @@ celery -A app.core.celery_app worker --loglevel=info -Q scans --pool=solo --conc
 
 #### 5. Start the frontend
 
-Create `frontend/.env.local`:
+Create `frontend/.env.local`.
 
 ```env
 NEXT_PUBLIC_API_BASE_URL=http://localhost:8000/api/v1
@@ -293,33 +307,37 @@ npm run dev
 | Frontend | `http://localhost:3000` |
 | Backend API | `http://localhost:8000` |
 | Swagger UI | `http://localhost:8000/docs` |
+| Health | `http://localhost:8000/health` |
 | Flower | `http://localhost:5555` |
 | PostgreSQL | `localhost:5432` |
 | Redis | `localhost:6379` |
 
+## Environment Notes
+
+- Backend settings are loaded from `.env` files at the repo root or from `backend/../.env` when launched from the backend directory.
+- Frontend runtime config lives in `frontend/.env.local`.
+- The frontend reads `NEXT_PUBLIC_API_BASE_URL`; its WebSocket stream is derived from that value.
+- The Celery worker consumes the `scans` queue.
+- On Windows, Celery runs with the solo pool and concurrency 1.
+- The `agents` service in `docker-compose.yml` is a tooling container, not the main worker process.
+
 ## Optional Security Tooling
 
-The scan workflow can use additional local tools when they are available on your machine.
+The scan workflow can use these local tools when installed and available on `PATH`:
 
 - `nuclei`
+- `zap-baseline.py` or a local ZAP runtime
 - `semgrep`
 - `bandit`
 - `trivy`
 - `gitleaks`
-- `zap-baseline.py`
 
-These are not required to boot the app, but they improve scanner coverage when installed and available on `PATH`.
+They are not required to boot the application, but they improve scanner coverage.
 
-## Environment Notes
+## Operational Notes
 
-- Backend settings load from the root `.env` file
-- Frontend local settings should go in `frontend/.env.local`
-- The frontend uses `NEXT_PUBLIC_API_BASE_URL`
-- The backend requires PostgreSQL and Redis to be reachable before scans can run successfully
-- AI-assisted scan reasoning requires at least one provider key such as `GROQ_API_KEY` or `OPENAI_API_KEY`
-
-## Notes
-
-- The backend does not apply migrations automatically on startup. Run `alembic upgrade head` before using the API against a new database.
-- The Celery worker is the service that runs scans. The separate `agents` container in `docker-compose.yml` is a tooling container, not the main execution path.
-- The frontend derives its WebSocket connection from `NEXT_PUBLIC_API_BASE_URL`, so you only need to set that one frontend environment variable for local development.
+- The backend verifies database connectivity on startup but does not apply migrations automatically.
+- The worker is responsible for executing scans; the API only schedules and orchestrates them.
+- The report layer includes JSON, Markdown, PDF, and SARIF exports.
+- Findings include status tracking, evidence, comments, suppression, and remediation history.
+- The agent pipeline records trace data so operators can inspect each stage of the scan.

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from html import unescape
 import json
 import os
+import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -54,12 +56,21 @@ def _find_zap_runtime() -> dict[str, str] | None:
     return None
 
 
+def _clean_zap_text(value: Any) -> str:
+    text = unescape(str(value or "")).strip()
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
 def _normalize_zap_alert(alert: dict[str, Any], target_url: str) -> dict[str, Any]:
     risk = str(alert.get("riskcode") or alert.get("risk") or "0").lower()
     severity_map = {"3": "high", "2": "medium", "1": "low", "0": "info", "high": "high", "medium": "medium", "low": "low", "informational": "info"}
     instances = alert.get("instances") or []
     instance = instances[0] if instances else {}
     location = instance.get("uri") or target_url
+    summary = _clean_zap_text(alert.get("desc") or alert.get("description") or alert.get("name"))
+    solution = _clean_zap_text(alert.get("solution") or alert.get("otherinfo"))
     return {
         "id": f"zap-{alert.get('pluginid') or alert.get('pluginId') or alert.get('name', 'alert')}",
         "title": alert.get("name") or "OWASP ZAP alert",
@@ -68,9 +79,10 @@ def _normalize_zap_alert(alert: dict[str, Any], target_url: str) -> dict[str, An
         "location": location,
         "parameter": instance.get("param"),
         "payload": instance.get("attack"),
-        "evidence": instance.get("evidence") or alert.get("description"),
+        "evidence": instance.get("evidence") or _clean_zap_text(alert.get("otherinfo") or alert.get("desc")),
         "confidence": 83,
-        "summary": alert.get("description") or "OWASP ZAP detected a passive or baseline scan issue.",
+        "summary": summary or "OWASP ZAP detected a passive or baseline scan issue.",
+        "remediation": solution or None,
         "reproduction_steps": [
             f"Run OWASP ZAP baseline scan against {target_url}.",
             f"Review the alert details for {location}.",

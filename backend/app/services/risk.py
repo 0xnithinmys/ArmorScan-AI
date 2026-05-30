@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from html import unescape
+import re
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
@@ -73,6 +75,70 @@ def _text_for(finding: dict[str, Any]) -> str:
     ).lower()
 
 
+def _clean_text(value: Any) -> str:
+    text = unescape(str(value or "")).strip()
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _zap_finding_override(finding: dict[str, Any]) -> tuple[str | None, str | None]:
+    title = str(finding.get("title") or "").lower()
+    if not title:
+        return None, None
+    if "content security policy" in title or "csp header not set" in title:
+        return (
+            "ZAP flagged a missing Content Security Policy header.",
+            "Set a Content-Security-Policy header that only allows approved sources.",
+        )
+    if "missing anti-clickjacking header" in title or "x-frame-options" in title:
+        return (
+            "ZAP flagged a missing anti-clickjacking header.",
+            "Set X-Frame-Options or CSP frame-ancestors to prevent the page from being framed by untrusted origins.",
+        )
+    if "x-content-type-options" in title:
+        return (
+            "ZAP flagged a missing X-Content-Type-Options header.",
+            "Set X-Content-Type-Options: nosniff on responses that serve executable or user-controlled content.",
+        )
+    if "strict-transport-security" in title or "hsts" in title:
+        return (
+            "ZAP flagged missing HTTP Strict Transport Security coverage.",
+            "Enable HSTS with an appropriate max-age and includeSubDomains once HTTPS is enforced everywhere.",
+        )
+    if "sub resource integrity" in title or "subresource integrity" in title:
+        return (
+            "ZAP found a third-party asset without Subresource Integrity.",
+            "Add integrity and crossorigin attributes to external scripts and styles, or pin them to a trusted source.",
+        )
+    if "cross-domain javascript source file inclusion" in title:
+        return (
+            "ZAP found JavaScript loaded from a cross-domain source.",
+            "Serve scripts from trusted origins or add Subresource Integrity and strict allowlists.",
+        )
+    if "cross-domain misconfiguration" in title:
+        return (
+            "ZAP detected a cross-domain policy misconfiguration.",
+            "Restrict cross-domain policy files and headers to trusted origins and remove permissive defaults.",
+        )
+    if "retrieved from cache" in title:
+        return (
+            "ZAP observed content being served from a cache layer.",
+            "Ensure sensitive responses use no-store or private cache directives and are not shared by intermediaries.",
+        )
+    if "re-examine cache-control directives" in title:
+        return (
+            "ZAP flagged cache-control directives that need review.",
+            "Set cache-control, pragma, and expires values appropriate for sensitive versus static content.",
+        )
+    if "user agent fuzzer" in title:
+        return (
+            "ZAP exercised user-agent handling during passive checks.",
+            "Review robots.txt and user-agent handling for unintended disclosure or routing differences.",
+        )
+    return None, None
+
+
 def _context_modifier(finding: dict[str, Any]) -> int:
     text = _text_for(finding)
     modifier = 0
@@ -96,6 +162,27 @@ def _exploitability_modifier(finding: dict[str, Any]) -> int:
 
 def remediation_for(finding: dict[str, Any]) -> str:
     text = _text_for(finding)
+    title = str(finding.get("title") or "").lower()
+    if "content security policy" in title or "csp header not set" in title:
+        return "Set a Content-Security-Policy header that only allows approved sources."
+    if "missing anti-clickjacking header" in title or "x-frame-options" in title:
+        return "Set X-Frame-Options or CSP frame-ancestors to prevent framing by untrusted origins."
+    if "x-content-type-options" in title:
+        return "Set X-Content-Type-Options: nosniff on responses that serve executable or user-controlled content."
+    if "strict-transport-security" in title or "hsts" in title:
+        return "Enable HSTS with an appropriate max-age and includeSubDomains once HTTPS is enforced everywhere."
+    if "sub resource integrity" in title or "subresource integrity" in title:
+        return "Add integrity and crossorigin attributes to external scripts and styles, or pin them to trusted sources."
+    if "cross-domain javascript source file inclusion" in title:
+        return "Serve scripts from trusted origins or add Subresource Integrity and strict allowlists."
+    if "cross-domain misconfiguration" in title:
+        return "Restrict cross-domain policy files and headers to trusted origins and remove permissive defaults."
+    if "retrieved from cache" in title:
+        return "Ensure sensitive responses use no-store or private cache directives and are not shared by intermediaries."
+    if "re-examine cache-control directives" in title:
+        return "Set cache-control, pragma, and expires values appropriate for sensitive versus static content."
+    if "user agent fuzzer" in title:
+        return "Review robots.txt and user-agent handling for unintended disclosure or routing differences."
     if "eval" in text or "exec()" in text or "dynamic code" in text:
         return (
             "Remove dynamic code execution. Replace eval/exec with a constrained parser, "
@@ -121,6 +208,17 @@ def score_finding(finding: dict[str, Any]) -> dict[str, Any]:
     severity = str(finding.get("severity", "info")).lower()
     confidence = int(finding.get("confidence") or 0)
     source = str(finding.get("source") or "").lower()
+    summary = _clean_text(finding.get("summary"))
+    if source == "owasp-zap" and (
+        summary.lower() in {"", "owasp zap detected a passive or baseline scan issue."}
+        or summary.lower().startswith("owasp zap detected")
+    ):
+        override_summary, _ = _zap_finding_override(finding)
+        if override_summary:
+            summary = override_summary
+    if not summary:
+        override_summary, _ = _zap_finding_override(finding)
+        summary = override_summary or str(finding.get("title") or "Security finding")
     base = SEVERITY_BASE.get(severity, SEVERITY_BASE["info"])
     confidence_modifier = round((confidence - 70) * 0.25)
     context_modifier = _context_modifier(finding)
@@ -131,6 +229,7 @@ def score_finding(finding: dict[str, Any]) -> dict[str, Any]:
     scored = dict(finding)
     scored.update(
         {
+            "summary": summary,
             "risk_score": score,
             "risk_rating": rating,
             "owasp_category": map_owasp_category(finding),

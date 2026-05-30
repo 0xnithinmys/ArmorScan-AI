@@ -1,6 +1,6 @@
-from fpdf import FPDF
 from typing import Any
-import json
+
+from fpdf import FPDF
 
 class ArmorScanPDF(FPDF):
     def header(self):
@@ -35,6 +35,15 @@ class ArmorScanPDF(FPDF):
         self.multi_cell(0, 6, text)
         self.ln(2)
 
+
+def _pdf_bytes(pdf: FPDF) -> bytes:
+    output = pdf.output(dest="S")
+    if isinstance(output, bytes):
+        return output
+    if isinstance(output, bytearray):
+        return bytes(output)
+    return str(output).encode("latin-1", errors="replace")
+
 def get_severity_color(rating: str):
     r = rating.lower()
     if r == "critical": return (255, 124, 112) # #ff7c70
@@ -45,13 +54,15 @@ def get_severity_color(rating: str):
 
 def generate_pdf_report(report: dict[str, Any]) -> bytes:
     pdf = ArmorScanPDF()
+    pdf.set_auto_page_break(auto=True, margin=18)
+    pdf.alias_nb_pages()
     pdf.add_page()
     
     # Target Info
     target_url = report['target'].get('target_url') or report['target'].get('url') or 'Unknown Target'
     pdf.set_font('Helvetica', 'B', 14)
     pdf.set_text_color(40, 40, 40)
-    pdf.cell(0, 10, f'Target: {target_url}', 0, 1)
+    pdf.multi_cell(0, 8, f'Target: {target_url}')
     
     overall_rating = report['executive_summary']['overall_risk_rating'].upper()
     overall_score = report['executive_summary']['overall_risk_score']
@@ -78,7 +89,7 @@ def generate_pdf_report(report: dict[str, Any]) -> bytes:
         # Title
         pdf.set_font('Helvetica', 'B', 12)
         pdf.set_text_color(20, 20, 20)
-        pdf.cell(0, 8, f"{idx}. {finding.get('title')}", 0, 1)
+        pdf.multi_cell(0, 8, f"{idx}. {finding.get('title')}")
         
         # Risk Badge
         rating = str(finding.get('risk_rating')).upper()
@@ -129,4 +140,4 @@ def generate_pdf_report(report: dict[str, Any]) -> bytes:
         pdf.line(10, pdf.get_y(), 200, pdf.get_y())
         pdf.ln(5)
 
-    return pdf.output(dest='S')
+    return _pdf_bytes(pdf)
