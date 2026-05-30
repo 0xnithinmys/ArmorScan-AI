@@ -8,6 +8,159 @@ from armorscan.policy import evaluate_agent_action
 from armorscan.utils import normalize_target_url
 
 
+async def _capture_page_surface(page, target_url: str) -> dict[str, Any]:
+    errors: list[str] = []
+    response = None
+    final_url = target_url
+    title = ""
+    forms: list[dict[str, Any]] = []
+    inputs: list[dict[str, Any]] = []
+    upload_inputs: list[dict[str, Any]] = []
+    anchors: list[str] = []
+    scripts: list[str] = []
+    buttons: list[dict[str, Any]] = []
+    clickable_surfaces: list[dict[str, Any]] = []
+    accessibility_snapshot: Any = None
+    screenshot_bytes = b""
+
+    try:
+        response = await page.goto(target_url, wait_until="domcontentloaded", timeout=20000)
+    except Exception as exc:
+        errors.append(f"navigation failed: {type(exc).__name__}: {exc!r}")
+        return {
+            "url": target_url,
+            "title": title,
+            "status_code": None,
+            "buttons": buttons,
+            "scripts": scripts,
+            "uploads": upload_inputs,
+            "clickable_surfaces": clickable_surfaces,
+            "requests": [],
+            "responses": [],
+            "accessibility_tree": accessibility_snapshot,
+            "screenshot_bytes": 0,
+            "forms": forms,
+            "inputs": inputs,
+            "anchors": anchors,
+            "final_url": final_url,
+            "errors": errors,
+        }
+
+    try:
+        await page.wait_for_load_state("networkidle", timeout=8000)
+    except Exception as exc:
+        errors.append(f"network idle wait failed: {type(exc).__name__}: {exc!r}")
+
+    try:
+        title = await page.title()
+    except Exception as exc:
+        errors.append(f"title read failed: {type(exc).__name__}: {exc!r}")
+
+    try:
+        final_url = page.url
+    except Exception as exc:
+        errors.append(f"final URL read failed: {type(exc).__name__}: {exc!r}")
+
+    try:
+        forms = await page.locator("form").evaluate_all(
+            """forms => forms.map(form => ({
+                action: form.action || null,
+                method: (form.method || 'get').toLowerCase(),
+                input_count: form.querySelectorAll('input, textarea, select').length
+            }))"""
+        )
+    except Exception as exc:
+        errors.append(f"form extraction failed: {type(exc).__name__}: {exc!r}")
+
+    try:
+        inputs = await page.locator("input, textarea, select").evaluate_all(
+            """nodes => nodes.map(node => {
+                const type = node.getAttribute('type');
+                const name = node.getAttribute('name');
+                const id = node.id || null;
+                const placeholder = node.getAttribute('placeholder');
+                const ariaLabel = node.getAttribute('aria-label');
+                const autocomplete = node.getAttribute('autocomplete');
+                const role = node.getAttribute('role');
+                const haystack = [type, name, id, placeholder, ariaLabel, autocomplete, role].filter(Boolean).join(' ').toLowerCase();
+                const purpose = /search|query|filter|find/.test(haystack) ? 'search' : (/password|passcode|secret/.test(haystack) ? 'auth' : 'generic');
+                return {
+                    tag: node.tagName.toLowerCase(),
+                    type,
+                    name,
+                    id,
+                    placeholder,
+                    aria_label: ariaLabel,
+                    autocomplete,
+                    role,
+                    purpose
+                };
+            }).slice(0, 60)"""
+        )
+    except Exception as exc:
+        errors.append(f"input extraction failed: {type(exc).__name__}: {exc!r}")
+
+    upload_inputs = [item for item in inputs if str(item.get("type") or "").lower() == "file"]
+
+    try:
+        anchors = await page.locator("a[href]").evaluate_all(
+            """links => links.map(link => link.href).filter(Boolean).slice(0, 120)"""
+        )
+    except Exception as exc:
+        errors.append(f"anchor extraction failed: {type(exc).__name__}: {exc!r}")
+
+    try:
+        scripts = await page.locator("script[src]").evaluate_all(
+            """scripts => scripts.map(script => script.src).filter(Boolean).slice(0, 120)"""
+        )
+    except Exception as exc:
+        errors.append(f"script extraction failed: {type(exc).__name__}: {exc!r}")
+
+    try:
+        buttons = await page.locator("button, [role='button']").evaluate_all(
+            """nodes => nodes.map(node => ({
+                text: (node.innerText || node.getAttribute('aria-label') || '').trim().slice(0, 80),
+                type: node.getAttribute('type')
+            })).slice(0, 50)"""
+        )
+    except Exception as exc:
+        errors.append(f"button extraction failed: {type(exc).__name__}: {exc!r}")
+
+    try:
+        clickable_surfaces = await _explore_safe_clicks(page, target_url)
+    except Exception as exc:
+        errors.append(f"clickable surface exploration failed: {type(exc).__name__}: {exc!r}")
+
+    try:
+        accessibility_snapshot = await page.accessibility.snapshot()
+    except Exception as exc:
+        errors.append(f"accessibility snapshot failed: {type(exc).__name__}: {exc!r}")
+
+    try:
+        screenshot_bytes = await page.screenshot(full_page=False)
+    except Exception as exc:
+        errors.append(f"screenshot failed: {type(exc).__name__}: {exc!r}")
+
+    return {
+        "url": final_url,
+        "title": title,
+        "status_code": response.status if response else None,
+        "buttons": buttons,
+        "scripts": scripts,
+        "uploads": upload_inputs,
+        "clickable_surfaces": clickable_surfaces,
+        "requests": [],
+        "responses": [],
+        "accessibility_tree": accessibility_snapshot,
+        "screenshot_bytes": len(screenshot_bytes),
+        "forms": forms,
+        "inputs": inputs,
+        "anchors": anchors,
+        "final_url": final_url,
+        "errors": errors,
+    }
+
+
 async def run_browser_recon(
     target_url: str,
     *,
@@ -74,59 +227,70 @@ async def run_browser_recon(
                 lambda response: responses.append({"url": response.url, "status": response.status}),
             )
 
-            response = await page.goto(target_url, wait_until="domcontentloaded", timeout=20000)
-            await page.wait_for_load_state("networkidle", timeout=8000)
+            page_snapshots: list[dict[str, Any]] = []
+            visited: set[str] = set()
 
-            title = await page.title()
-            final_url = page.url
-            forms = await page.locator("form").evaluate_all(
-                """forms => forms.map(form => ({
-                    action: form.action || null,
-                    method: (form.method || 'get').toLowerCase(),
-                    input_count: form.querySelectorAll('input, textarea, select').length
-                }))"""
-            )
-            inputs = await page.locator("input, textarea, select").evaluate_all(
-                """nodes => nodes.map(node => ({
-                    tag: node.tagName.toLowerCase(),
-                    type: node.getAttribute('type'),
-                    name: node.getAttribute('name'),
-                    id: node.id || null,
-                    placeholder: node.getAttribute('placeholder'),
-                    aria_label: node.getAttribute('aria-label')
-                })).slice(0, 50)"""
-            )
-            upload_inputs = [
-                item for item in inputs if str(item.get("type") or "").lower() == "file"
-            ]
-            anchors = await page.locator("a[href]").evaluate_all(
-                """links => links.map(link => link.href).filter(Boolean).slice(0, 100)"""
-            )
-            scripts = await page.locator("script[src]").evaluate_all(
-                """scripts => scripts.map(script => script.src).filter(Boolean).slice(0, 100)"""
-            )
-            buttons = await page.locator("button, [role='button']").evaluate_all(
-                """nodes => nodes.map(node => ({
-                    text: (node.innerText || node.getAttribute('aria-label') || '').trim().slice(0, 80),
-                    type: node.getAttribute('type')
-                })).slice(0, 50)"""
-            )
-            clickable_surfaces = await _explore_safe_clicks(page, target_url)
-            accessibility_snapshot = await page.accessibility.snapshot()
-            screenshot_bytes = await page.screenshot(full_page=False)
+            async def visit(url: str) -> None:
+                normalized = normalize_target_url(url)
+                if normalized in visited or len(page_snapshots) >= 6:
+                    return
+                visited.add(normalized)
+                snapshot = await _capture_page_surface(page, normalized)
+                if requests:
+                    snapshot["requests"] = requests[:100]
+                if responses:
+                    snapshot["responses"] = responses[:100]
+                page_snapshots.append(snapshot)
+
+            await visit(target_url)
+
+            crawl_candidates: list[str] = []
+            if page_snapshots:
+                first_snapshot = page_snapshots[0]
+                crawl_candidates.extend(
+                    link for link in first_snapshot.get("anchors", []) if isinstance(link, str) and link
+                )
+                crawl_candidates.extend(
+                    urljoin(target_url.rstrip("/") + "/", path.lstrip("/"))
+                    for path in ["/login", "/search", "/api", "/health", "/graphql"]
+                )
+
+            for candidate in crawl_candidates:
+                if len(page_snapshots) >= 6:
+                    break
+                if not candidate or not _same_host(target_url, candidate):
+                    continue
+                if any(candidate.endswith(blocked) for blocked in (".pdf", ".png", ".jpg", ".jpeg", ".gif", ".svg")):
+                    continue
+                try:
+                    await visit(candidate)
+                except Exception:
+                    continue
+
             await browser.close()
 
-            routes = list(
-                dict.fromkeys(
+            routes: list[str] = []
+            forms: list[dict[str, Any]] = []
+            inputs: list[dict[str, Any]] = []
+            scripts: list[str] = []
+            upload_inputs: list[dict[str, Any]] = []
+            clickable_surfaces: list[dict[str, Any]] = []
+            for snapshot in page_snapshots:
+                routes.extend(
                     [
-                        final_url,
-                        *anchors,
-                        *[item["url"] for item in clickable_surfaces if item.get("url")],
-                        *[urljoin(target_url, path) for path in ["/"]],
+                        snapshot.get("final_url") or snapshot.get("url"),
+                        *snapshot.get("anchors", []),
+                        *[item["url"] for item in snapshot.get("clickable_surfaces", []) if item.get("url")],
                     ]
                 )
-            )
-            status = response.status if response else None
+                forms.extend(snapshot.get("forms", []))
+                inputs.extend(snapshot.get("inputs", []))
+                scripts.extend(snapshot.get("scripts", []))
+                upload_inputs.extend(snapshot.get("uploads", []))
+                clickable_surfaces.extend(snapshot.get("clickable_surfaces", []))
+
+            routes = list(dict.fromkeys([route for route in routes if route]))
+            clickable_surfaces = clickable_surfaces[:30]
             return {
                 "routes": routes,
                 "forms": forms,
@@ -136,20 +300,13 @@ async def run_browser_recon(
                 "clickable_surfaces": clickable_surfaces,
                 "observations": [
                     {
-                        "url": final_url,
-                        "title": title,
-                        "status_code": status,
-                        "buttons": buttons,
-                        "scripts": scripts,
-                        "uploads": upload_inputs,
-                        "clickable_surfaces": clickable_surfaces,
+                        **snapshot,
                         "requests": requests[:100],
                         "responses": responses[:100],
-                        "accessibility_tree": accessibility_snapshot,
-                        "screenshot_bytes": len(screenshot_bytes),
                     }
+                    for snapshot in page_snapshots
                 ],
-                "errors": [],
+                "errors": [error for snapshot in page_snapshots for error in snapshot.get("errors", [])],
                 "policy_decisions": [decision.as_dict()],
             }
     except Exception as exc:

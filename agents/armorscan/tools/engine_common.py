@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 import shutil
 import tempfile
 from hashlib import sha256
@@ -93,13 +94,17 @@ async def ensure_repo_target(target: str) -> tuple[Path | None, list[str], dict[
 
 
 async def run_json_command(args: list[str], *, timeout_seconds: int = 90) -> tuple[int, str, str]:
-    proc = await asyncio.create_subprocess_exec(
-        *args,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
-    return proc.returncode, stdout.decode("utf-8", errors="replace"), stderr.decode("utf-8", errors="replace")
+    def _run() -> tuple[int, str, str]:
+        completed = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+        return completed.returncode, completed.stdout, completed.stderr
+
+    return await asyncio.to_thread(_run)
 
 
 def parse_json_lines(output: str) -> list[dict[str, Any]]:

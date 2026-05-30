@@ -4,6 +4,8 @@ import shutil
 from dataclasses import dataclass, asdict
 from typing import Any
 
+from armorscan.tools.zap_tools import _find_zap_runtime
+
 
 @dataclass(slots=True)
 class ScannerCapability:
@@ -105,7 +107,10 @@ def scanner_capabilities_for(scan_type: str) -> list[dict[str, Any]]:
             continue
         item = capability.as_dict()
         command = item.get("command")
-        item["installed"] = bool(command and shutil.which(command))
+        if capability.name == "zap-baseline":
+            item["installed"] = _find_zap_runtime() is not None
+        else:
+            item["installed"] = bool(command and shutil.which(command))
         capabilities.append(item)
     return capabilities
 

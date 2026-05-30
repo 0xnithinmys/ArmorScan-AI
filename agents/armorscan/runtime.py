@@ -13,12 +13,79 @@ from armorscan.tools.playwright_tools import run_browser_recon
 from armorscan.tools.repo_tools import inspect_repository
 from armorscan.utils import normalize_target_url
 
-COMMON_PATHS = ["/", "/login", "/search", "/admin", "/api", "/health", "/graphql"]
+COMMON_PATHS = ["/", "/login", "/search", "/api", "/health", "/graphql"]
 
 
 def _host_label(target_url: str) -> str:
     parsed = urlparse(normalize_target_url(target_url))
     return parsed.netloc or parsed.path
+
+
+def _route_is_present(routes: list[str], suffix: str) -> bool:
+    normalized_suffix = suffix.rstrip("/").lower()
+    for route in routes:
+        route_value = str(route).rstrip("/").lower()
+        if route_value.endswith(normalized_suffix):
+            return True
+    return False
+
+
+def _looks_like_search_control(item: dict[str, Any]) -> bool:
+    haystack = " ".join(
+        str(item.get(key) or "")
+        for key in ("type", "name", "id", "placeholder", "aria_label", "autocomplete", "role")
+    ).lower()
+    return any(marker in haystack for marker in ("search", "query", "filter", "find"))
+
+
+def _looks_like_password_control(item: dict[str, Any]) -> bool:
+    haystack = " ".join(
+        str(item.get(key) or "")
+        for key in ("type", "name", "id", "placeholder", "aria_label", "autocomplete", "role", "purpose")
+    ).lower()
+    return any(marker in haystack for marker in ("password", "passcode", "secret"))
+
+
+def _has_search_surface(state: ScanState) -> bool:
+    if any(_looks_like_search_control(item) for item in state.get("discovered_inputs", [])):
+        return True
+    for form in state.get("discovered_forms", []):
+        form_text = " ".join(str(form.get(key) or "") for key in ("action", "method", "input_count"))
+        if any(marker in form_text.lower() for marker in ("search", "query", "filter", "find")):
+            return True
+    for observation in state.get("browser_observations", []):
+        for control in observation.get("clickable_surfaces", []):
+            control_text = " ".join(
+                str(control.get(key) or "") for key in ("text", "tag", "kind", "reason")
+            ).lower()
+            if any(marker in control_text for marker in ("search", "query", "filter", "find")):
+                return True
+    return False
+
+
+def _has_password_surface(state: ScanState) -> bool:
+    return any(_looks_like_password_control(item) for item in state.get("discovered_inputs", []))
+
+
+def draft_has_evidence(draft: dict[str, Any], state: ScanState) -> bool:
+    title = str(draft.get("title") or "").lower()
+    url = str(draft.get("url") or "").lower()
+    parameter = str(draft.get("parameter") or "").lower()
+    routes = state.get("discovered_routes", [])
+
+    if "admin" in title or "/admin" in url or url.rstrip("/").endswith("admin"):
+        return _route_is_present(routes, "/admin")
+    if "search" in title or parameter in {"q", "query", "search"} or "/search" in url:
+        return _has_search_surface(state)
+    if "graphql" in title or "/graphql" in url:
+        return _route_is_present(routes, "/graphql") or any(
+            "graphql" in str(item).lower() for item in state.get("discovered_apis", [])
+        )
+    if "api" in title or "/api" in url:
+        return bool(state.get("discovered_apis")) or _route_is_present(routes, "/api")
+    if any(marker in title for marker in ("auth", "login", "signin")):
+        return _has_password_surface(state) or _route_is_present(routes, "/login")
+    return True
 
 
 async def passive_recon(
@@ -127,9 +194,7 @@ async def passive_recon(
 def fallback_analysis(state: ScanState) -> list[FindingDraft]:
     drafts: list[FindingDraft] = []
     host = _host_label(state["target_url"])
-    body = " ".join(str(obs.get("body_excerpt", "")) for obs in state["http_observations"])
     headers = " ".join(str(obs.get("headers", {})) for obs in state["http_observations"])
-    browser_text = " ".join(str(obs.get("accessibility_tree", "")) for obs in state["browser_observations"])
     engine_text = " ".join(
         f"{finding.get('title')} {finding.get('summary')} {finding.get('evidence')}"
         for finding in state.get("engine_findings", [])
@@ -152,7 +217,7 @@ def fallback_analysis(state: ScanState) -> list[FindingDraft]:
             }
         )
 
-    if any(route.endswith("/admin") for route in state["discovered_routes"]):
+    if _route_is_present(state["discovered_routes"], "/admin"):
         drafts.append(
             {
                 "id": "admin-surface",
@@ -172,7 +237,7 @@ def fallback_analysis(state: ScanState) -> list[FindingDraft]:
             }
         )
 
-    if "search" in body.lower() or any("search" in route for route in state["discovered_routes"]):
+    if _has_search_surface(state):
         drafts.append(
             {
                 "id": "reflected-input-check",
@@ -212,7 +277,9 @@ def fallback_analysis(state: ScanState) -> list[FindingDraft]:
             }
         )
 
-    if "button" in browser_text.lower() or state["browser_observations"]:
+    if state["browser_observations"] and (
+        state["discovered_forms"] or state["discovered_inputs"] or state.get("discovered_apis")
+    ):
         drafts.append(
             {
                 "id": "dynamic-ui-surface",

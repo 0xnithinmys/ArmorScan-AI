@@ -17,7 +17,7 @@ import httpx
 from armorscan.evidence import build_evidence_summary
 from armorscan.findings import clamp_confidence, dedupe_findings, normalize_draft
 from armorscan.planning import build_scan_plan
-from armorscan.runtime import build_report, fallback_analysis, llm_client, passive_recon
+from armorscan.runtime import build_report, draft_has_evidence, fallback_analysis, llm_client, passive_recon
 from armorscan.specialists import (
     api_discovery_agent,
     apply_specialist_result,
@@ -287,7 +287,7 @@ async def analysis_node(state: ScanState) -> ScanState:
         )
 
     next_state = deepcopy(state)
-    next_state["findings_drafts"] = drafts
+    next_state["findings_drafts"] = [draft for draft in drafts if draft_has_evidence(draft, state)]
     next_state["status"] = "observing"
     return append_trace(
         next_state,

@@ -12,6 +12,45 @@ class GroqResponsesClient:
     def __init__(self) -> None:
         self.enabled = bool(settings.groq_api_key)
 
+    def _extract_json_payload(self, body: dict[str, Any]) -> dict[str, Any] | None:
+        text = body.get("output_text")
+        if not text:
+            output = body.get("output") or []
+            chunks: list[str] = []
+            for item in output:
+                for content in item.get("content") or []:
+                    if isinstance(content, dict):
+                        chunk = content.get("text") or content.get("output_text") or content.get("value")
+                        if chunk:
+                            chunks.append(str(chunk))
+            text = "".join(chunks).strip() or None
+
+        if not text:
+            return None
+
+        if isinstance(text, str):
+            cleaned = text.strip()
+            if cleaned.startswith("```"):
+                cleaned = cleaned.strip("`")
+                if cleaned.startswith("json"):
+                    cleaned = cleaned[4:].lstrip()
+            try:
+                return json.loads(cleaned)
+            except json.JSONDecodeError:
+                start_candidates = [index for index in (cleaned.find("{"), cleaned.find("[")) if index >= 0]
+                end_candidates = [cleaned.rfind("}"), cleaned.rfind("]")]
+                if not start_candidates or max(end_candidates) < 0:
+                    return None
+                start = min(start_candidates)
+                end = max(end_candidates)
+                if end <= start:
+                    return None
+                try:
+                    return json.loads(cleaned[start : end + 1])
+                except json.JSONDecodeError:
+                    return None
+        return None
+
     async def create_structured_response(
         self,
         *,
@@ -50,13 +89,13 @@ class GroqResponsesClient:
                 response = await client.post("/responses", json=payload)
                 response.raise_for_status()
                 body = response.json()
-                text = body.get("output_text")
-                if text:
-                    return json.loads(text)
+                parsed = self._extract_json_payload(body)
+                if parsed is not None:
+                    return parsed
             except httpx.HTTPStatusError as exc:
-                if exc.response.status_code not in {400, 404, 422}:
+                if exc.response.status_code not in {404, 422}:
                     raise
-
+        try:
             response = await client.post(
                 "/chat/completions",
                 json={
@@ -71,7 +110,6 @@ class GroqResponsesClient:
                             ),
                         },
                     ],
-                    "response_format": {"type": "json_object"},
                     "temperature": 0.1,
                 },
             )
@@ -80,4 +118,6 @@ class GroqResponsesClient:
             text = (body.get("choices") or [{}])[0].get("message", {}).get("content")
             if not text:
                 return None
-            return json.loads(text)
+            return self._extract_json_payload({"output_text": text})
+        except httpx.HTTPStatusError:
+            return None

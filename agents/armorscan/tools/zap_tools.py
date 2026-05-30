@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -8,6 +9,49 @@ from typing import Any
 
 from armorscan.policy import evaluate_agent_action
 from armorscan.tools.engine_common import EngineResult, normalize_severity, run_json_command
+
+
+def _candidate_zap_install_dirs() -> list[Path]:
+    program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
+    program_files_x86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+    user_profile = os.environ.get("USERPROFILE", r"C:\Users\Nithin")
+    return [
+        Path(program_files) / "ZAP" / "Zed Attack Proxy",
+        Path(program_files_x86) / "ZAP" / "Zed Attack Proxy",
+        Path(user_profile) / "ZAP",
+    ]
+
+
+def _find_zap_runtime() -> dict[str, str] | None:
+    baseline = shutil.which("zap-baseline.py") or shutil.which("zap-baseline")
+    if baseline:
+        return {"mode": "baseline-script", "launcher": baseline}
+
+    java = shutil.which("java")
+    if not java:
+        java = (
+            Path(r"C:\Program Files\Eclipse Adoptium\jre-17.0.19.10-hotspot\bin\java.exe")
+            if Path(r"C:\Program Files\Eclipse Adoptium\jre-17.0.19.10-hotspot\bin\java.exe").exists()
+            else None
+        )
+        if java is not None:
+            java = str(java)
+
+    for install_dir in _candidate_zap_install_dirs():
+        jar = next(install_dir.glob("zap-*.jar"), None)
+        if jar is not None and java:
+            return {
+                "mode": "jar",
+                "java": java,
+                "jar": str(jar),
+                "install_dir": str(install_dir),
+            }
+        zap_bat = install_dir / "zap.bat"
+        if zap_bat.exists():
+            # Use the batch launcher if Java is already on PATH.
+            if shutil.which("java"):
+                return {"mode": "bat", "launcher": str(zap_bat)}
+    return None
 
 
 def _normalize_zap_alert(alert: dict[str, Any], target_url: str) -> dict[str, Any]:
@@ -55,21 +99,38 @@ async def run_zap_baseline_scan(
         result.observations.append({"engine": "owasp-zap", "blocked_by_policy": decision.reason})
         return result
 
-    binary = shutil.which("zap-baseline.py") or shutil.which("zap-baseline")
-    if not binary:
-        result.errors.append("OWASP ZAP baseline script is not installed or not on PATH")
+    runtime = _find_zap_runtime()
+    if not runtime:
+        result.errors.append("OWASP ZAP is not installed or could not be located")
         result.observations.append(
             {
                 "engine": "owasp-zap",
                 "available": False,
-                "message": "Install OWASP ZAP baseline to enable passive spidering and alert normalization.",
+                "message": "Install OWASP ZAP and Java 17+, or put zap-baseline.py on PATH.",
             }
         )
         return result
 
     result.available = True
     report_path = Path(tempfile.gettempdir()) / "armorscan-zap-report.json"
-    args = [binary, "-t", target_url, "-J", str(report_path), "-m", "3"]
+    zap_home = Path(tempfile.mkdtemp(prefix="armorscan-zap-home-"))
+    if runtime["mode"] == "baseline-script":
+        args = [runtime["launcher"], "-t", target_url, "-J", str(report_path), "-m", "3"]
+    else:
+        args = [
+            runtime["java"],
+            "-jar",
+            runtime["jar"],
+            "-dir",
+            str(zap_home),
+            "-cmd",
+            "-quickurl",
+            target_url,
+            "-quickout",
+            str(report_path),
+            "-silent",
+            "-notel",
+        ]
     try:
         return_code, stdout, stderr = await run_json_command(args, timeout_seconds=300)
         findings: list[dict[str, Any]] = []
@@ -83,6 +144,7 @@ async def run_zap_baseline_scan(
             {
                 "engine": "owasp-zap",
                 "available": True,
+                "launcher_mode": runtime["mode"],
                 "return_code": return_code,
                 "alerts": len(findings),
             }
@@ -97,6 +159,11 @@ async def run_zap_baseline_scan(
         if report_path.exists():
             try:
                 report_path.unlink()
+            except OSError:
+                pass
+        if "zap_home" in locals() and zap_home.exists():
+            try:
+                shutil.rmtree(zap_home)
             except OSError:
                 pass
     return result
